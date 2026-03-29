@@ -65,6 +65,26 @@ def init_db(db_path: str) -> sqlite3.Connection:
             modified_at  REAL,
             PRIMARY KEY(vault_id, file_path)
         );
+
+        CREATE TABLE IF NOT EXISTS pending_captures (
+            id          INTEGER PRIMARY KEY,
+            content     TEXT NOT NULL,
+            title       TEXT,
+            tags        TEXT,                       -- JSON array of strings
+            source      TEXT DEFAULT 'cli',
+            metadata    TEXT,                       -- JSON blob for extra fields
+            created_at  REAL DEFAULT (unixepoch()),
+            status      TEXT DEFAULT 'pending'      -- 'pending' | 'flushed' | 'failed'
+        );
+
+        CREATE TABLE IF NOT EXISTS pending_log_entries (
+            id          INTEGER PRIMARY KEY,
+            text        TEXT NOT NULL,
+            refs        TEXT,                       -- JSON array of wikilink targets
+            target_date TEXT NOT NULL,              -- ISO date YYYY-MM-DD: the day this belongs to
+            created_at  REAL DEFAULT (unixepoch()),
+            status      TEXT DEFAULT 'pending'      -- 'pending' | 'written' | 'failed'
+        );
     """)
     conn.commit()
     return conn
@@ -202,6 +222,92 @@ def get_watcher_state(conn: sqlite3.Connection, vault_id: int) -> dict[str, dict
         row["file_path"]: {"hash": row["content_hash"], "modified_at": row["modified_at"]}
         for row in cur.fetchall()
     }
+
+
+def insert_pending_capture(
+    conn: sqlite3.Connection,
+    content: str,
+    title: str | None,
+    tags: list[str] | None,
+    source: str,
+    metadata: dict | None,
+) -> int:
+    import json
+    cur = conn.execute(
+        """
+        INSERT INTO pending_captures(content, title, tags, source, metadata)
+        VALUES(?,?,?,?,?)
+        RETURNING id
+        """,
+        (
+            content,
+            title,
+            json.dumps(tags) if tags else None,
+            source,
+            json.dumps(metadata) if metadata else None,
+        ),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    return row[0]
+
+
+def list_pending_captures(conn: sqlite3.Connection) -> list[dict]:
+    import json
+    cur = conn.execute(
+        "SELECT * FROM pending_captures WHERE status='pending' ORDER BY created_at ASC"
+    )
+    rows = cur.fetchall()
+    results = []
+    for row in rows:
+        r = dict(row)
+        r["tags"] = json.loads(r["tags"]) if r["tags"] else []
+        r["metadata"] = json.loads(r["metadata"]) if r["metadata"] else {}
+        results.append(r)
+    return results
+
+
+def mark_capture_status(conn: sqlite3.Connection, capture_id: int, status: str) -> None:
+    conn.execute(
+        "UPDATE pending_captures SET status=? WHERE id=?",
+        (status, capture_id),
+    )
+    conn.commit()
+
+
+def insert_pending_log_entry(
+    conn: sqlite3.Connection,
+    text: str,
+    refs: list[str] | None,
+    target_date: str,
+) -> int:
+    import json
+    cur = conn.execute(
+        "INSERT INTO pending_log_entries(text, refs, target_date) VALUES(?,?,?) RETURNING id",
+        (text, json.dumps(refs or []), target_date),
+    )
+    row = cur.fetchone()
+    conn.commit()
+    return row[0]
+
+
+def list_pending_log_entries(conn: sqlite3.Connection) -> list[dict]:
+    import json
+    cur = conn.execute(
+        "SELECT * FROM pending_log_entries WHERE status='pending' ORDER BY target_date ASC, created_at ASC"
+    )
+    rows = cur.fetchall()
+    results = []
+    for row in rows:
+        r = dict(row)
+        r["refs"] = json.loads(r["refs"]) if r["refs"] else []
+        results.append(r)
+    return results
+
+
+def mark_log_entry_status(conn: sqlite3.Connection, entry_id: int, status: str) -> None:
+    conn.execute("UPDATE pending_log_entries SET status=? WHERE id=?", (status, entry_id))
+    conn.commit()
 
 
 def pack_vector(vec: list[float]) -> bytes:

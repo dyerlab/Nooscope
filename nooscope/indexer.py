@@ -135,43 +135,74 @@ def index_file(
     vault_root: str,
     backends: dict[str, EmbeddingBackend],
     config,
+    defer_moc: bool = False,
 ) -> None:
+    from nooscope.barycenter import update_chunk_barycenter, update_moc_barycenter
+
     doc = parse_document(file_path, vault_root)
     chunks = chunk_document(doc, config.chunking.max_tokens)
+    is_chunked = len(chunks) > 1
 
-    parent_doc_id = None
-    for chunk in chunks:
-        doc_id = upsert_document(
-            conn,
-            vault_id=vault_id,
-            file_path=doc["file_path"],
-            title=doc["title"],
-            content=chunk["content"],
-            frontmatter_json=doc["frontmatter_json"],
-            content_hash=doc["content_hash"],
-            modified_at=doc["modified_at"],
-            word_count=chunk["word_count"],
-            chunk_index=chunk["chunk_index"],
-            section=chunk["section"],
-            parent_id=parent_doc_id if chunk["chunk_index"] > 0 else None,
-            is_moc=doc["is_moc"],
-        )
-        if chunk["chunk_index"] == 0:
-            parent_doc_id = doc_id
+    # Always upsert the parent row (chunk_index=0) first to obtain its ID.
+    parent_doc_id = upsert_document(
+        conn,
+        vault_id=vault_id,
+        file_path=doc["file_path"],
+        title=doc["title"],
+        content=chunks[0]["content"],
+        frontmatter_json=doc["frontmatter_json"],
+        content_hash=doc["content_hash"],
+        modified_at=doc["modified_at"],
+        word_count=chunks[0]["word_count"],
+        chunk_index=0,
+        section=None,
+        parent_id=None,
+        is_moc=doc["is_moc"],
+    )
 
-        for etype, backend in backends.items():
-            if not chunk["content"].strip():
-                continue
-            vectors = backend.embed([chunk["content"]])
-            vector_bytes = pack_vector(vectors[0])
-            upsert_embedding(
+    if doc["is_moc"] and not defer_moc:
+        # Embed directly as a fallback for hybrid MOC notes that have prose,
+        # then overwrite with barycenter once referenced files are confirmed indexed.
+        if chunks[0]["content"].strip():
+            for etype, backend in backends.items():
+                vectors = backend.embed([chunks[0]["content"]])
+                upsert_embedding(conn, parent_doc_id, etype, backend.model,
+                                 pack_vector(vectors[0]), backend.dimensions)
+        for etype in backends:
+            update_moc_barycenter(conn, parent_doc_id, etype, vault_id)
+    elif is_chunked:
+        # Embed each section chunk; derive the parent's vector as their barycenter.
+        for chunk in chunks[1:]:
+            chunk_doc_id = upsert_document(
                 conn,
-                document_id=doc_id,
-                embedding_type=etype,
-                model=backend.model,
-                vector_bytes=vector_bytes,
-                dimensions=backend.dimensions,
+                vault_id=vault_id,
+                file_path=doc["file_path"],
+                title=doc["title"],
+                content=chunk["content"],
+                frontmatter_json=doc["frontmatter_json"],
+                content_hash=doc["content_hash"],
+                modified_at=doc["modified_at"],
+                word_count=chunk["word_count"],
+                chunk_index=chunk["chunk_index"],
+                section=chunk["section"],
+                parent_id=parent_doc_id,
+                is_moc=False,
             )
+            for etype, backend in backends.items():
+                if not chunk["content"].strip():
+                    continue
+                vectors = backend.embed([chunk["content"]])
+                upsert_embedding(conn, chunk_doc_id, etype, backend.model,
+                                 pack_vector(vectors[0]), backend.dimensions)
+        for etype in backends:
+            update_chunk_barycenter(conn, parent_doc_id, etype)
+    else:
+        # Fits within context window — embed the full document directly.
+        if chunks[0]["content"].strip():
+            for etype, backend in backends.items():
+                vectors = backend.embed([chunks[0]["content"]])
+                upsert_embedding(conn, parent_doc_id, etype, backend.model,
+                                 pack_vector(vectors[0]), backend.dimensions)
 
     upsert_watcher_state(
         conn,
@@ -183,13 +214,35 @@ def index_file(
 
 
 def rebuild_vault(conn, vault_id: int, vault_root: str, backends: dict[str, EmbeddingBackend], config) -> dict:
+    from nooscope.barycenter import update_moc_barycenter
+
     results = {"reindexed": 0, "skipped": 0, "errors": []}
     vault_path = Path(vault_root)
 
-    for md_file in sorted(vault_path.rglob("*.md")):
+    all_files = sorted(vault_path.rglob("*.md"))
+    moc_files: list[Path] = []
+
+    # First pass: index all non-MOC files so their embeddings exist before
+    # any MOC barycenter computation tries to reference them.
+    for md_file in all_files:
         rel = str(md_file.relative_to(vault_root))
         try:
+            doc = parse_document(str(md_file), vault_root)
+            if doc["is_moc"]:
+                moc_files.append(md_file)
+                continue
             index_file(conn, vault_id, str(md_file), vault_root, backends, config)
+            results["reindexed"] += 1
+        except Exception as exc:
+            results["errors"].append({"file": rel, "error": str(exc)})
+
+    # Second pass: index MOC files and compute their barycenters now that all
+    # referenced notes are present in the DB.
+    for md_file in moc_files:
+        rel = str(md_file.relative_to(vault_root))
+        try:
+            index_file(conn, vault_id, str(md_file), vault_root, backends, config,
+                       defer_moc=False)
             results["reindexed"] += 1
         except Exception as exc:
             results["errors"].append({"file": rel, "error": str(exc)})

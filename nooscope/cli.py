@@ -17,6 +17,24 @@ def main() -> None:
     subparsers.add_parser("watch", help="Start incremental file watcher")
     subparsers.add_parser("serve", help="Start MCP server")
 
+    cap_parser = subparsers.add_parser("capture", help="Queue a new capture for later flush")
+    cap_parser.add_argument("content", help="Note content")
+    cap_parser.add_argument("--title", default=None)
+    cap_parser.add_argument("--tags", default=None, help="Comma-separated tags")
+    cap_parser.add_argument("--source", default="cli")
+
+    subparsers.add_parser("queue", help="List pending captures")
+
+    flush_parser = subparsers.add_parser("flush", help="Flush pending captures to Obsidian")
+    flush_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+
+    log_parser = subparsers.add_parser("log", help="Queue a logger:: entry for today's daily note")
+    log_parser.add_argument("text", help="Log entry text")
+    log_parser.add_argument("--refs", default=None, help="Comma-separated wikilink targets e.g. 'Nooscope,Alice'")
+    log_parser.add_argument("--date", default=None, help="Target date YYYY-MM-DD (default: today)")
+
+    subparsers.add_parser("flush-logs", help="Retry pending log entries against their target daily notes")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -84,6 +102,100 @@ def main() -> None:
     elif args.command == "serve":
         from nooscope.mcp_server import main as mcp_main
         mcp_main()
+
+    elif args.command == "capture":
+        from nooscope.capture import queue_capture
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        conn = init_db(vault_cfg.db_path)
+        upsert_vault(conn, vault_cfg.name, vault_cfg.path)
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else []
+        capture_id = queue_capture(conn, args.content, title=args.title, tags=tags, source=args.source)
+        logging.info("Queued capture #%d", capture_id)
+        conn.close()
+
+    elif args.command == "queue":
+        from nooscope.db import list_pending_captures
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        conn = init_db(vault_cfg.db_path)
+        upsert_vault(conn, vault_cfg.name, vault_cfg.path)
+        pending = list_pending_captures(conn)
+        if not pending:
+            print("No pending captures.")
+        else:
+            for c in pending:
+                tags_str = ", ".join(c["tags"]) if c["tags"] else ""
+                title_str = f" [{c['title']}]" if c["title"] else ""
+                print(f"#{c['id']}{title_str} ({c['source']}) {tags_str}")
+                print(f"  {c['content'][:80]}{'…' if len(c['content']) > 80 else ''}")
+        conn.close()
+
+    elif args.command == "log":
+        from nooscope.capture import log_entry
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        conn = init_db(vault_cfg.db_path)
+        upsert_vault(conn, vault_cfg.name, vault_cfg.path)
+        refs = [r.strip() for r in args.refs.split(",")] if args.refs else []
+        from datetime import date as _date
+        target_date = _date.fromisoformat(args.date) if args.date else None
+        result = log_entry(conn, vault_cfg.path, args.text, refs, config, today=target_date)
+        if result["status"] == "written":
+            logging.info("Written to %s", result["file"])
+            logging.info("  %s", result["entry"])
+        else:
+            logging.info("Queued as #%d — daily note not yet available, will retry", result["id"])
+        conn.close()
+
+    elif args.command == "flush-logs":
+        from nooscope.capture import flush_log_entries
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        conn = init_db(vault_cfg.db_path)
+        upsert_vault(conn, vault_cfg.name, vault_cfg.path)
+        results = flush_log_entries(conn, vault_cfg.path, config, poll=True)
+        logging.info("Written: %d, still pending: %d", results["written"], results["still_pending"])
+        for err in results["errors"]:
+            logging.error("  #%s: %s", err["id"], err["error"])
+        conn.close()
+
+    elif args.command == "flush":
+        from nooscope.capture import flush_captures
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        conn = init_db(vault_cfg.db_path)
+        upsert_vault(conn, vault_cfg.name, vault_cfg.path)
+        if args.dry_run:
+            from nooscope.db import list_pending_captures
+            from nooscope.capture import _note_filename
+            pending = list_pending_captures(conn)
+            if not pending:
+                print("No pending captures.")
+            else:
+                print(f"{len(pending)} pending capture(s) would be flushed via '{config.capture.flush_method}':")
+                for c in pending:
+                    print(f"  #{c['id']} → {config.capture.inbox_folder}/{_note_filename(c)}")
+        else:
+            results = flush_captures(conn, config)
+            logging.info(
+                "Flushed %d, failed %d",
+                results["flushed"],
+                results["failed"],
+            )
+            for err in results["errors"]:
+                logging.error("  #%s: %s", err["id"], err["error"])
+        conn.close()
 
 
 if __name__ == "__main__":

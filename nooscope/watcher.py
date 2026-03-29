@@ -36,6 +36,19 @@ class VaultEventHandler(FileSystemEventHandler):
         except Exception as exc:
             log.error("Error indexing %s: %s", event.src_path, exc)
 
+        # If a daily note just appeared, flush any pending log entries that were
+        # waiting for it — Obsidian just created the note from its template.
+        daily_folder = Path(self.vault_root) / self.config.capture.daily_notes_folder
+        if Path(event.src_path).parent == daily_folder:
+            try:
+                from nooscope.capture import flush_log_entries
+                results = flush_log_entries(self.conn, self.vault_root, self.config, poll=False)
+                if results["written"]:
+                    log.info("Flushed %d pending log entry(ies) to %s", results["written"],
+                             Path(event.src_path).name)
+            except Exception as exc:
+                log.error("Error flushing log entries: %s", exc)
+
     def on_modified(self, event) -> None:
         if event.is_directory or not event.src_path.endswith(".md"):
             return

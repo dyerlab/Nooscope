@@ -36,11 +36,25 @@ class MCPConfig:
 
 
 @dataclass
+class CaptureConfig:
+    flush_method: str = "uri"          # uri | inbox | rest
+    inbox_folder: str = "_inbox"
+    obsidian_vault_name: str = ""      # must match Obsidian's vault display name
+    rest_port: int = 27123
+    rest_api_key: str = ""
+    daily_notes_folder: str = "Resources/Daily"
+    daily_notes_format: str = "%Y-%m-%d"
+    log_section: str = "Notes"         # heading name (without ##) to append logger:: entries
+    daily_notes_template: str = ""     # vault-relative path to Templater template, e.g. Resources/Templates/Daily Note.md
+
+
+@dataclass
 class Config:
     vaults: list[VaultConfig]
     embedding_types: dict[str, EmbeddingConfig]
     chunking: ChunkingConfig
     mcp: MCPConfig
+    capture: CaptureConfig = field(default_factory=CaptureConfig)
 
 
 def load_config(path: str | None = None) -> Config:
@@ -92,4 +106,23 @@ def load_config(path: str | None = None) -> Config:
         port=raw_mcp.get("port", 8765),
     )
 
-    return Config(vaults=vaults, embedding_types=embedding_types, chunking=chunking, mcp=mcp)
+    raw_cap = raw.get("capture", {})
+    capture = CaptureConfig(
+        flush_method=raw_cap.get("flush_method", "uri"),
+        inbox_folder=raw_cap.get("inbox_folder", "_inbox"),
+        obsidian_vault_name=raw_cap.get("obsidian_vault_name", ""),
+        rest_port=raw_cap.get("rest_port", 27123),
+        rest_api_key=raw_cap.get("rest_api_key", ""),
+        daily_notes_folder=raw_cap.get("daily_notes_folder", "Resources/Daily"),
+        daily_notes_format=raw_cap.get("daily_notes_format", "%Y-%m-%d"),
+        log_section=raw_cap.get("log_section", "Notes"),
+        daily_notes_template=raw_cap.get("daily_notes_template", ""),
+    )
+
+    return Config(
+        vaults=vaults,
+        embedding_types=embedding_types,
+        chunking=chunking,
+        mcp=mcp,
+        capture=capture,
+    )

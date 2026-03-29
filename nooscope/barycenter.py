@@ -33,6 +33,8 @@ def update_moc_barycenter(
 ) -> None:
     import re
 
+    from nooscope.db import upsert_embedding
+
     transclusion_re = re.compile(r"!\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
     cur = conn.execute(
@@ -47,12 +49,14 @@ def update_moc_barycenter(
 
     component_ids = []
     vectors = []
+    model = None
+    dimensions = None
 
     for stem in stems:
         stem_clean = stem.strip()
         cur2 = conn.execute(
             """
-            SELECT d.id, e.vector FROM documents d
+            SELECT d.id, e.vector, e.model, e.dimensions FROM documents d
             JOIN embeddings e ON e.document_id = d.id
             WHERE d.vault_id=? AND d.chunk_index=0 AND e.embedding_type=?
               AND (d.file_path LIKE ? OR d.file_path = ?)
@@ -62,9 +66,11 @@ def update_moc_barycenter(
         )
         r = cur2.fetchone()
         if r:
-            component_ids.append(r[0] if not hasattr(r, "__getitem__") else r["id"])
-            blob = r[1] if not hasattr(r, "__getitem__") else r["vector"]
-            vectors.append(unpack_vector(blob))
+            component_ids.append(r["id"])
+            vectors.append(unpack_vector(r["vector"]))
+            if model is None:
+                model = r["model"]
+                dimensions = r["dimensions"]
 
     if not vectors:
         return
@@ -84,13 +90,16 @@ def update_moc_barycenter(
         """,
         (document_id, embedding_type, vector_bytes, json.dumps(component_ids), len(component_ids)),
     )
+    upsert_embedding(conn, document_id, embedding_type, model, vector_bytes, dimensions)
     conn.commit()
 
 
 def update_chunk_barycenter(conn, parent_doc_id: int, embedding_type: str) -> None:
+    from nooscope.db import upsert_embedding
+
     cur = conn.execute(
         """
-        SELECT e.vector FROM documents d
+        SELECT d.id, e.vector, e.model, e.dimensions FROM documents d
         JOIN embeddings e ON e.document_id = d.id
         WHERE d.parent_id=? AND e.embedding_type=? AND d.chunk_index > 0
         """,
@@ -100,12 +109,10 @@ def update_chunk_barycenter(conn, parent_doc_id: int, embedding_type: str) -> No
     if not rows:
         return
 
-    vectors = [unpack_vector(r[0] if not hasattr(r, "__getitem__") else r["vector"]) for r in rows]
-    component_ids_cur = conn.execute(
-        "SELECT id FROM documents WHERE parent_id=? AND chunk_index > 0",
-        (parent_doc_id,),
-    )
-    component_ids = [r[0] for r in component_ids_cur.fetchall()]
+    vectors = [unpack_vector(r["vector"]) for r in rows]
+    component_ids = [r["id"] for r in rows]
+    model = rows[0]["model"]
+    dimensions = rows[0]["dimensions"]
 
     bary = compute_barycenter(vectors)
     vector_bytes = pack_vector(bary)
@@ -122,4 +129,5 @@ def update_chunk_barycenter(conn, parent_doc_id: int, embedding_type: str) -> No
         """,
         (parent_doc_id, embedding_type, vector_bytes, json.dumps(component_ids), len(component_ids)),
     )
+    upsert_embedding(conn, parent_doc_id, embedding_type, model, vector_bytes, dimensions)
     conn.commit()

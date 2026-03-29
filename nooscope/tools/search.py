@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import numpy as np
 
@@ -52,21 +53,24 @@ def search(
     results = []
     for row in rows:
         vec = unpack_vector(row["vector"])
-        score = _cosine(query_vec, vec)
-        if score >= threshold:
-            snippet = (row["content"] or "")[:200]
+        similarity = _cosine(query_vec, vec)
+        if similarity >= threshold:
+            file_path = row["file_path"]
+            folder = str(Path(file_path).parent) if "/" in file_path else ""
             results.append(
                 {
-                    "file_path": row["file_path"],
+                    "file_path": file_path,
+                    "folder": folder,
                     "title": row["title"],
                     "section": row["section"],
                     "chunk_index": row["chunk_index"],
-                    "score": score,
-                    "snippet": snippet,
+                    "similarity": similarity,
+                    "content": row["content"] or "",
+                    "source": "obsidian",
                 }
             )
 
-    results.sort(key=lambda r: r["score"], reverse=True)
+    results.sort(key=lambda r: r["similarity"], reverse=True)
     return results[:limit]
 
 
@@ -111,15 +115,18 @@ def cross_space_search(
         score_high = _cosine(high_vec, unpack_vector(row["high_vector"]))
         score_low = _cosine(low_vec, unpack_vector(row["low_vector"]))
         delta = score_high - score_low
-        snippet = (row["content"] or "")[:200]
+        file_path = row["file_path"]
+        folder = str(Path(file_path).parent) if "/" in file_path else ""
         results.append(
             {
-                "file_path": row["file_path"],
+                "file_path": file_path,
+                "folder": folder,
                 "title": row["title"],
                 "score_high": score_high,
                 "score_low": score_low,
                 "delta": delta,
-                "snippet": snippet,
+                "content": row["content"] or "",
+                "source": "obsidian",
             }
         )
 

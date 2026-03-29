@@ -16,3 +16,19 @@ chunking:
 
 mcp:
   transport: stdio
+  # host: 127.0.0.1
+  # port: 8765
+
+capture:
+  # Structured note capture (queued, flushed as new files)
+  flush_method: uri               # uri | inbox | rest
+  inbox_folder: _inbox
+  obsidian_vault_name: BrainTree  # must match Obsidian's vault display name exactly
+  # rest_port: 27123              # for rest method (Obsidian Local REST API plugin)
+  # rest_api_key: ""
+
+  # Ephemeral log entries (direct write to today's daily note)
+  daily_notes_folder: Resources/Daily
+  daily_notes_format: "%Y-%m-%d"
+  log_section: Notes              # ## heading name to append logger:: bullets under
+  daily_notes_template: "Resources/Templates/Daily Note.md"  # Templater template; <% %> tags rendered by Obsidian on first open

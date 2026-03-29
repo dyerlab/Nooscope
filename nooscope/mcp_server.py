@@ -11,6 +11,7 @@ from nooscope.tools.search import search as _search, cross_space_search as _cros
 from nooscope.tools.navigation import read_note as _read_note, list_notes as _list_notes, get_backlinks as _get_backlinks
 from nooscope.tools.analysis import vault_stats as _vault_stats
 from nooscope.tools.management import rebuild_tool as _rebuild_tool
+from nooscope.capture import queue_capture as _queue_capture, log_entry as _log_entry, flush_log_entries as _flush_log_entries
 
 mcp = FastMCP("nooscope")
 
@@ -89,6 +90,45 @@ def rebuild(vault: str | None = None, embedding_type: str | None = None) -> dict
         config=s["config"],
         embedding_type=embedding_type,
     )
+
+
+@mcp.tool()
+def capture_thought(
+    content: str,
+    title: str | None = None,
+    tags: list[str] | None = None,
+    source: str = "mcp",
+) -> dict:
+    """Queue a structured note for later flush to the Obsidian vault inbox.
+
+    Use this for content that warrants its own note: has a title, belongs in
+    the permanent vault structure, and is not time-critical.
+    """
+    s = _get_state()
+    capture_id = _queue_capture(s["conn"], content, title=title, tags=tags or [], source=source)
+    return {"id": capture_id, "status": "queued"}
+
+
+@mcp.tool()
+def log_thought(
+    text: str,
+    refs: list[str] | None = None,
+) -> dict:
+    """Queue a logger:: entry for today's daily note.
+
+    Use this for ephemeral, time-stamped observations — quick notes that
+    reference a project, person, or meeting. The entry appears automatically
+    in the Dataview log of any referenced note.
+
+    Always queued first (never lost), then flushed immediately if the daily
+    note exists. If Obsidian hasn't created today's note yet, returns
+    status='pending' and retries automatically when the note appears.
+
+    refs: list of note names to [[wikilink]] e.g. ["Nooscope", "Alice"]
+    """
+    s = _get_state()
+    vault_root = s["config"].vaults[0].path
+    return _log_entry(s["conn"], vault_root, text, refs or [], s["config"])
 
 
 def _resolve_vault_id(state: dict, vault_name: str | None) -> int | None:
