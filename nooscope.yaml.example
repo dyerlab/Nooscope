@@ -1,0 +1,18 @@
+vaults:
+  - name: braintree
+    path: /Volumes/Developer/BrainTree
+    db_path: /Volumes/Developer/BrainTree/nooscope.db
+
+embeddings:
+  semantic:
+    backend: ollama
+    model: nomic-embed-text
+    dimensions: 768
+
+chunking:
+  max_tokens: 512
+  strategy: headings
+  moc_barycenter_weight: uniform
+
+mcp:
+  transport: stdio
