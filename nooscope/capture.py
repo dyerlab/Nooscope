@@ -159,6 +159,14 @@ def _create_from_template(daily_path: Path, text: str, refs: list[str] | None, v
     lines = template_path.read_text(encoding="utf-8").splitlines(keepends=True)
     lines = _insert_bullet_into_lines(lines, bullet, f"## {cap_cfg.log_section}")
 
+    # Inject calendar agenda if enabled
+    try:
+        from nooscope.agenda_injector import inject_agenda
+        target_date = date.fromisoformat(daily_path.stem) if daily_path.stem else date.today()
+        lines = inject_agenda(lines, target_date, vault_root, config)
+    except Exception as exc:
+        log.warning("Agenda injection failed: %s", exc)
+
     daily_path.parent.mkdir(parents=True, exist_ok=True)
     daily_path.write_text("".join(lines), encoding="utf-8")
     log.info("Created daily note from template: %s", daily_path.name)

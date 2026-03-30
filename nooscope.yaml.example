@@ -32,3 +32,11 @@ capture:
   daily_notes_format: "%Y-%m-%d"
   log_section: Notes              # ## heading name to append logger:: bullets under
   daily_notes_template: "Resources/Templates/Daily Note.md"  # Templater template; <% %> tags rendered by Obsidian on first open
+
+calendar:
+  enabled: false
+  calendars: []                                    # empty = all calendars; or ["Work", "Personal"]
+  agenda_section: Agenda                           # ## heading name to inject events under
+  meetings_folder: References/Meetings
+  meeting_template: Resources/Templates/Meeting.md
+  # anthropic_api_key: ""                          # falls back to ANTHROPIC_API_KEY env var

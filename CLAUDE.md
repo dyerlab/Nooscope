@@ -8,7 +8,7 @@ Nooscope is a Python-based MCP (Model Context Protocol) server that maintains a 
 
 **Status:** Implemented and operational. The vault at `/Volumes/Developer/BrainTree` is indexed (1,784 notes, 4,839 embeddings). The MCP server runs via `nooscope serve` and is registered with both Claude Code CLI and Claude Desktop.
 
-The primary vault is at `/Volumes/Developer/BrainTree`. The project note is at `Projects/Nooscope.md` in that vault.
+The primary vault is at `/Volumes/Developer/BrainTree`. The project note is at `Projects/Nooscope.md` in that vault. Vault topology and folder conventions are documented in `References/VaultLayout.md` — consult this before asking questions about where things live.
 
 ## Commands
 

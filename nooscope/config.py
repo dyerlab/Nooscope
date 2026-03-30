@@ -49,12 +49,23 @@ class CaptureConfig:
 
 
 @dataclass
+class CalendarConfig:
+    enabled: bool = False
+    calendars: list[str] = field(default_factory=list)   # empty = all calendars
+    agenda_section: str = "Agenda"
+    meetings_folder: str = "References/Meetings"
+    meeting_template: str = "Resources/Templates/Meeting.md"
+    anthropic_api_key: str = ""        # falls back to ANTHROPIC_API_KEY env var
+
+
+@dataclass
 class Config:
     vaults: list[VaultConfig]
     embedding_types: dict[str, EmbeddingConfig]
     chunking: ChunkingConfig
     mcp: MCPConfig
     capture: CaptureConfig = field(default_factory=CaptureConfig)
+    calendar: CalendarConfig = field(default_factory=CalendarConfig)
 
 
 def load_config(path: str | None = None) -> Config:
@@ -119,10 +130,21 @@ def load_config(path: str | None = None) -> Config:
         daily_notes_template=raw_cap.get("daily_notes_template", ""),
     )
 
+    raw_cal = raw.get("calendar", {})
+    calendar = CalendarConfig(
+        enabled=raw_cal.get("enabled", False),
+        calendars=raw_cal.get("calendars", []),
+        agenda_section=raw_cal.get("agenda_section", "Agenda"),
+        meetings_folder=raw_cal.get("meetings_folder", "References/Meetings"),
+        meeting_template=raw_cal.get("meeting_template", "Resources/Templates/Meeting.md"),
+        anthropic_api_key=raw_cal.get("anthropic_api_key", ""),
+    )
+
     return Config(
         vaults=vaults,
         embedding_types=embedding_types,
         chunking=chunking,
         mcp=mcp,
         capture=capture,
+        calendar=calendar,
     )

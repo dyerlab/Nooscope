@@ -19,6 +19,7 @@ dependencies = [
 apple = ["pyobjc-framework-NaturalLanguage"]
 mlx = ["mlx-lm"]
 openai = ["openai"]
+calendar = ["pyobjc-framework-EventKit", "anthropic"]
 
 [project.scripts]
 nooscope = "nooscope.cli:main"

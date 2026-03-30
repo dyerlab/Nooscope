@@ -35,6 +35,10 @@ def main() -> None:
 
     subparsers.add_parser("flush-logs", help="Retry pending log entries against their target daily notes")
 
+    agenda_parser = subparsers.add_parser("inject-agenda", help="Inject today's calendar events into a daily note")
+    agenda_parser.add_argument("--date", default=None, help="Target date YYYY-MM-DD (default: today)")
+    agenda_parser.add_argument("--dry-run", action="store_true", help="Print agenda lines without writing")
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -167,6 +171,49 @@ def main() -> None:
         for err in results["errors"]:
             logging.error("  #%s: %s", err["id"], err["error"])
         conn.close()
+
+    elif args.command == "inject-agenda":
+        from nooscope.calendar_reader import get_events_for_date
+        from nooscope.agenda_injector import inject_agenda
+        from datetime import date as _date
+        from pathlib import Path
+
+        if not config.vaults:
+            logging.error("No vaults configured")
+            sys.exit(1)
+        vault_cfg = config.vaults[0]
+        target_date = _date.fromisoformat(args.date) if args.date else _date.today()
+
+        cap_cfg = config.capture
+        filename = target_date.strftime(cap_cfg.daily_notes_format) + ".md"
+        daily_path = Path(vault_cfg.path) / cap_cfg.daily_notes_folder / filename
+
+        if args.dry_run:
+            from nooscope.agenda_injector import _build_agenda_lines, _recent_notes, _generate_refresher
+            events = get_events_for_date(target_date, calendars=config.calendar.calendars or None)
+            print(f"## Agenda ({target_date})")
+            if not events:
+                recent = _recent_notes(vault_cfg.path, config)
+                if recent:
+                    refresher = _generate_refresher(recent, config.calendar.anthropic_api_key)
+                    print(f"- No scheduled events today. {refresher}")
+                else:
+                    print("- No scheduled events today.")
+            else:
+                agenda_lines = _build_agenda_lines(events, target_date, vault_cfg.path, config, dry_run=True)
+                for line in agenda_lines:
+                    print(line)
+        elif not daily_path.exists():
+            logging.error("Daily note not found: %s", daily_path)
+            sys.exit(1)
+        else:
+            lines = daily_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            new_lines = inject_agenda(lines, target_date, vault_cfg.path, config)
+            if new_lines != lines:
+                daily_path.write_text("".join(new_lines), encoding="utf-8")
+                logging.info("Agenda injected into %s", daily_path.name)
+            else:
+                logging.warning("Nothing injected — check that calendar.enabled is true in nooscope.yaml")
 
     elif args.command == "flush":
         from nooscope.capture import flush_captures
