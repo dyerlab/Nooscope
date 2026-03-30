@@ -39,4 +39,4 @@ calendar:
   agenda_section: Agenda                           # ## heading name to inject events under
   meetings_folder: References/Meetings
   meeting_template: Resources/Templates/Meeting.md
-  # anthropic_api_key: ""                          # falls back to ANTHROPIC_API_KEY env var
+  # API keys must be set in the environment (ANTHROPIC_API_KEY), never in this file.

@@ -118,14 +118,14 @@ def _recent_notes(vault_root: str, config, days: int = 7, max_notes: int = 10) -
     return [title for _, title in candidates[:max_notes]]
 
 
-def _generate_refresher(recent_titles: list[str], api_key: str) -> str:
+def _generate_refresher(recent_titles: list[str]) -> str:
     """Call Claude Haiku to write a 1-2 sentence pick-up prompt from recent note titles."""
     try:
         import anthropic
     except ImportError:
         return f"Recent work: {', '.join(recent_titles[:5])}."
 
-    key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not key:
         return f"Recent work: {', '.join(recent_titles[:5])}."
 
@@ -177,7 +177,7 @@ def inject_agenda(
         log.info("No calendar events for %s — generating refresher", target_date)
         recent = _recent_notes(vault_root, config)
         if recent:
-            refresher = _generate_refresher(recent, cal_cfg.anthropic_api_key)
+            refresher = _generate_refresher(recent)
             agenda_lines = [f"- No scheduled events today. {refresher}"]
         else:
             agenda_lines = ["- No scheduled events today."]

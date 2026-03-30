@@ -55,7 +55,6 @@ class CalendarConfig:
     agenda_section: str = "Agenda"
     meetings_folder: str = "References/Meetings"
     meeting_template: str = "Resources/Templates/Meeting.md"
-    anthropic_api_key: str = ""        # falls back to ANTHROPIC_API_KEY env var
 
 
 @dataclass
@@ -137,7 +136,6 @@ def load_config(path: str | None = None) -> Config:
         agenda_section=raw_cal.get("agenda_section", "Agenda"),
         meetings_folder=raw_cal.get("meetings_folder", "References/Meetings"),
         meeting_template=raw_cal.get("meeting_template", "Resources/Templates/Meeting.md"),
-        anthropic_api_key=raw_cal.get("anthropic_api_key", ""),
     )
 
     return Config(

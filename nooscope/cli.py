@@ -195,7 +195,7 @@ def main() -> None:
             if not events:
                 recent = _recent_notes(vault_cfg.path, config)
                 if recent:
-                    refresher = _generate_refresher(recent, config.calendar.anthropic_api_key)
+                    refresher = _generate_refresher(recent)
                     print(f"- No scheduled events today. {refresher}")
                 else:
                     print("- No scheduled events today.")
