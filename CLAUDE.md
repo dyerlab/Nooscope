@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Nooscope is a Python-based MCP (Model Context Protocol) server that maintains a local, multi-embedding vector index of Obsidian markdown vaults. It exposes semantic search, corpus analysis, and capture tools to AI assistants via MCP.
 
-**Status:** Implemented and operational. The vault at `/Volumes/Developer/BrainTree` is indexed (1,784 notes, 4,839 embeddings). The MCP server runs via `nooscope serve` and is registered with both Claude Code CLI and Claude Desktop.
+**Status:** Implemented and operational. The vault at `/Volumes/Developer/BrainTree` is indexed (~1,823 notes). The MCP server runs via `nooscope serve` and is registered with both Claude Code CLI and Claude Desktop. The file watcher runs automatically via LaunchAgent at login.
 
 The primary vault is at `/Volumes/Developer/BrainTree`. The project note is at `Projects/Nooscope.md` in that vault. Vault topology and folder conventions are documented in `References/VaultLayout.md` — consult this before asking questions about where things live.
 
@@ -19,8 +19,8 @@ pipx install --force .             # Re-sync pipx after code changes
 .venv/bin/pytest                   # Run all tests
 .venv/bin/pytest tests/test_capture.py  # Run a single test file
 
-nooscope rebuild                   # Full vault reindex (~30-60 min for 1,900 notes)
-nooscope watch                     # Start incremental file watcher
+nooscope rebuild                   # Full vault reindex; also prunes deleted files from index
+nooscope watch                     # Start incremental file watcher (normally runs via LaunchAgent)
 nooscope serve                     # Start MCP server (stdio)
 
 nooscope log "text" --refs "Note,Person"   # Append logger:: to today's daily note
@@ -61,17 +61,37 @@ claude mcp list   # verify
 
 **Important:** Claude Desktop runs sandboxed and cannot access `/Volumes/`. Always use the pipx binary (`~/.local/bin/nooscope`) in the Desktop config, never the `.venv/bin/nooscope` path. After code changes, run `pipx install --force .` to sync.
 
+## File watcher (LaunchAgent)
+
+The watcher runs automatically via a LaunchAgent that starts at login:
+
+- **Plist:** `~/Library/LaunchAgents/com.dyerlab.nooscope.watch.plist`
+- **App bundle:** `~/Applications/Nooscope.app` (ad-hoc signed; makes it show as "Nooscope" in macOS Background Items instead of "python3")
+- **Logs:** `~/.local/share/nooscope/watch.log`
+
+```bash
+launchctl list | grep nooscope          # verify running
+launchctl unload ~/Library/LaunchAgents/com.dyerlab.nooscope.watch.plist
+launchctl load  ~/Library/LaunchAgents/com.dyerlab.nooscope.watch.plist
+tail -f ~/.local/share/nooscope/watch.log
+```
+
+After updating `Nooscope.app/Contents/MacOS/NooscopeWatcher` or `Info.plist`, re-sign:
+```bash
+codesign --sign - --force ~/Applications/Nooscope.app
+```
+
 ## Architecture
 
 ```
-Vault (markdown) → nooscope-watcher (watchdog/fsevents) → nooscope.db (SQLite)
-                                                                  ↓
-                                                   MCP Server (stdio)
-                                                   → Claude Code / Claude Desktop
+Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope.db (SQLite)
+                                                                       ↓
+                                                        MCP Server (stdio)
+                                                        → Claude Code / Claude Desktop
 ```
 
 **Core principles:**
-- Vault is canonical truth. `nooscope.db` is a rebuildable derivative.
+- Vault is canonical truth. `.nooscope/nooscope.db` is a rebuildable derivative.
 - Nooscope is read-only with respect to the vault, with two explicit exceptions: `log` writes to the daily note's `## Notes` section; `flush` writes to `_inbox/`.
 
 ### Module responsibilities
@@ -79,11 +99,11 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → nooscope.db (SQLit
 - `nooscope/cli.py` — Entry points: `rebuild`, `watch`, `serve`, `log`, `capture`, `queue`, `flush`, `flush-logs`
 - `nooscope/config.py` — Load and validate `nooscope.yaml`
 - `nooscope/db.py` — SQLite schema, CRUD, vector pack/unpack
-- `nooscope/indexer.py` — Parse, chunk by `##` headings, embed, store; two-pass MOC handling
+- `nooscope/indexer.py` — Parse, chunk by `##` headings, embed, store; two-pass MOC handling; stale-file pruning on rebuild; `is_ignored()` for vault ignore patterns
 - `nooscope/barycenter.py` — MOC and chunk barycenter computation; results stored in both `barycenters` and `embeddings` tables for uniform search
-- `nooscope/watcher.py` — Incremental updates via watchdog; triggers `flush_log_entries` when a daily note is created
+- `nooscope/watcher.py` — Incremental updates via watchdog; triggers `flush_log_entries` when a daily note is created; respects vault ignore patterns
 - `nooscope/capture.py` — Two capture modes: structured notes (queued → `_inbox/`) and ephemeral log entries (written to daily note, queued if note doesn't exist yet)
-- `nooscope/mcp_server.py` — FastMCP server with all tools
+- `nooscope/mcp_server.py` — FastMCP server with all tools; sets instructions via `mcp._mcp_server.instructions` (FastMCP 1.26+ has no public setter)
 - `nooscope/backends/` — Embedding backends implementing `EmbeddingBackend` from `base.py`
 - `nooscope/tools/` — MCP tool groups: `search`, `navigation`, `analysis`, `management`
 
@@ -119,7 +139,7 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → nooscope.db (SQLit
 - Fits in context window → embedded directly as `chunk_index=0`
 - Oversized + `##` headings → split into chunks 1..N; `chunk_index=0` gets barycenter of chunk embeddings
 - MOC notes (`is_moc=true`) → barycenter of `![[referenced]]` file embeddings
-- Oversized + no headings → embedded as-is (will get 400 from Ollama if too large); candidates for manual refactoring
+- Oversized + no headings → embedded as-is; candidates for manual refactoring
 
 ### Embedding backends
 
@@ -127,7 +147,7 @@ All implement `embed(texts: list[str]) -> list[list[float]]` and `is_available()
 
 | Backend | Platform | Notes |
 |---|---|---|
-| `OllamaBackend` | Any | **Default.** Requires Ollama with `nomic-embed-text` |
+| `OllamaBackend` | Any | **Default.** Requires Ollama running locally |
 | `MLXBackend` | macOS/Apple Silicon | Requires `mlx-lm` (stub) |
 | `AppleNLBackend` | macOS | `NaturalLanguage.framework` via PyObjC (stub) |
 | `OpenAIBackend` | Any | Requires `OPENAI_API_KEY` (stub) |
@@ -135,10 +155,24 @@ All implement `embed(texts: list[str]) -> list[list[float]]` and `is_available()
 
 ## Configuration
 
-`nooscope.yaml` (gitignored). See `nooscope.yaml.example` for full template including `capture:` section.
+`nooscope.yaml` (gitignored). See `nooscope.yaml.example` for full template.
 
-Key capture config:
+Key settings:
 ```yaml
+vaults:
+  - name: braintree
+    path: /Volumes/Developer/BrainTree
+    db_path: /Volumes/Developer/BrainTree/.nooscope/nooscope.db
+    ignore:                        # folders/globs to skip during indexing
+      - Resources/Templates
+      - ResourcesDaily
+
+embeddings:
+  semantic:
+    backend: ollama
+    model: bge-m3                  # 1024 dimensions, 8192-token context; switched from nomic-embed-text
+    dimensions: 1024
+
 capture:
   flush_method: uri
   obsidian_vault_name: BrainTree
@@ -146,9 +180,10 @@ capture:
   daily_notes_format: "%Y-%m-%d"
   log_section: Notes
   daily_notes_template: "Resources/Templates/Daily Note.md"
+  # API keys must be set in the environment (ANTHROPIC_API_KEY), never in this file.
 ```
 
 ## Known issues
 
-- ~128 notes failed indexing with 400 errors (exceed nomic-embed-text context window, no `##` heading structure to chunk on). Candidates for manual refactoring.
-- 3 notes have malformed YAML frontmatter (`Andy Matuschuck.md` and others).
+- 4 notes have malformed YAML frontmatter (`Andy Matuschuck.md`, `Bad Mother Application.md`, `MetaLearning A framework...`, `Omnivore Template.md`) — parse errors at index time, not embedded.
+- ~124 notes currently unindexed — mix of empty templates (now excluded via ignore list), short stubs, and a few oversized notes without `##` headings.

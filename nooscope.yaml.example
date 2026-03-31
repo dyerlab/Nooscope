@@ -1,7 +1,11 @@
 vaults:
   - name: braintree
     path: /Volumes/Developer/BrainTree
-    db_path: /Volumes/Developer/BrainTree/nooscope.db
+    db_path: /Volumes/Developer/BrainTree/.nooscope/nooscope.db
+    ignore:                        # paths/globs to skip during indexing (prefix or fnmatch)
+      - Resources/Templates        # template files are structure, not content
+      # - ResourcesDaily           # example: secondary folder to exclude
+      # - "**/.obsidian/**"        # example: glob pattern
 
 embeddings:
   semantic:

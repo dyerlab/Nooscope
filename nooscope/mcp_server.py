@@ -225,7 +225,7 @@ def generate_vault_layout(vault: str | None = None) -> dict:
     out_path.write_text(content, encoding="utf-8")
 
     # Reload into server instructions immediately
-    mcp.instructions = content
+    mcp._mcp_server.instructions = content
 
     return {
         "status": "created",
@@ -323,7 +323,7 @@ def main() -> None:
         }
     )
 
-    mcp.instructions = _load_vault_layout(config)
+    mcp._mcp_server.instructions = _load_vault_layout(config)
 
     mcp.run()
 

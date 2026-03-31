@@ -12,6 +12,7 @@ class VaultConfig:
     name: str
     path: str
     db_path: str
+    ignore: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -90,6 +91,7 @@ def load_config(path: str | None = None) -> Config:
             name=v["name"],
             path=v["path"],
             db_path=v["db_path"],
+            ignore=v.get("ignore", []),
         )
         for v in raw.get("vaults", [])
     ]

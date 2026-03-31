@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from fnmatch import fnmatch
 from pathlib import Path
 
 import frontmatter
@@ -32,6 +33,22 @@ _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
 
 _HEADING_RE = re.compile(r"^#{1,6}\s")
+
+
+def is_ignored(rel_path: str, patterns: list[str]) -> bool:
+    """Return True if rel_path matches any ignore pattern.
+
+    Patterns are matched as glob expressions (fnmatch). Bare folder names
+    without wildcards are also treated as prefix matches, so
+    "Resources/Templates" matches "Resources/Templates/Atomic.md".
+    """
+    for pattern in patterns:
+        if fnmatch(rel_path, pattern):
+            return True
+        prefix = pattern.rstrip("/")
+        if rel_path == prefix or rel_path.startswith(prefix + "/"):
+            return True
+    return False
 
 
 def _is_moc(content: str) -> bool:
@@ -222,10 +239,18 @@ def rebuild_vault(conn, vault_id: int, vault_root: str, backends: dict[str, Embe
     all_files = sorted(vault_path.rglob("*.md"))
     moc_files: list[Path] = []
 
+    ignore_patterns = getattr(
+        next((v for v in config.vaults if v.path == vault_root), None),
+        "ignore", []
+    )
+
     # First pass: index all non-MOC files so their embeddings exist before
     # any MOC barycenter computation tries to reference them.
     for md_file in all_files:
         rel = str(md_file.relative_to(vault_root))
+        if is_ignored(rel, ignore_patterns):
+            results["skipped"] += 1
+            continue
         try:
             doc = parse_document(str(md_file), vault_root)
             if doc["is_moc"]:
@@ -246,5 +271,13 @@ def rebuild_vault(conn, vault_id: int, vault_root: str, backends: dict[str, Embe
             results["reindexed"] += 1
         except Exception as exc:
             results["errors"].append({"file": rel, "error": str(exc)})
+
+    # Prune documents for files that no longer exist on disk.
+    rows = conn.execute(
+        "SELECT DISTINCT file_path FROM documents WHERE vault_id=?", (vault_id,)
+    ).fetchall()
+    for (file_path,) in rows:
+        if not (vault_path / file_path).exists():
+            delete_document_by_path(conn, vault_id, file_path)
 
     return results

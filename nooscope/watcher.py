@@ -10,7 +10,7 @@ from watchdog.observers import Observer
 
 from nooscope.backends.base import EmbeddingBackend
 from nooscope.db import delete_document_by_path, get_watcher_state
-from nooscope.indexer import index_file
+from nooscope.indexer import index_file, is_ignored
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,14 @@ class VaultEventHandler(FileSystemEventHandler):
     def on_created(self, event) -> None:
         if event.is_directory or not event.src_path.endswith(".md"):
             return
-        log.info("Created: %s", self._rel(event.src_path))
+        rel = self._rel(event.src_path)
+        ignore_patterns = getattr(
+            next((v for v in self.config.vaults if v.path == self.vault_root), None),
+            "ignore", []
+        )
+        if is_ignored(rel, ignore_patterns):
+            return
+        log.info("Created: %s", rel)
         try:
             index_file(self.conn, self.vault_id, event.src_path, self.vault_root, self.backends, self.config)
         except Exception as exc:
@@ -52,7 +59,14 @@ class VaultEventHandler(FileSystemEventHandler):
     def on_modified(self, event) -> None:
         if event.is_directory or not event.src_path.endswith(".md"):
             return
-        log.info("Modified: %s", self._rel(event.src_path))
+        rel = self._rel(event.src_path)
+        ignore_patterns = getattr(
+            next((v for v in self.config.vaults if v.path == self.vault_root), None),
+            "ignore", []
+        )
+        if is_ignored(rel, ignore_patterns):
+            return
+        log.info("Modified: %s", rel)
         try:
             index_file(self.conn, self.vault_id, event.src_path, self.vault_root, self.backends, self.config)
         except Exception as exc:
