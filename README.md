@@ -1,3 +1,5 @@
+![](https://www.flickr.com/photo_download.gne?id=55179377424&secret=621ca9e2be&size=c&source=photoPageEngagement)
+
 # Nooscope
 
 A sidecar MCP (Model Context Protocol) server for Obsidian vaults. Maintains a local SQLite vector index of your markdown notes and exposes semantic search, navigation, and capture tools to Claude Code and Claude Desktop.
