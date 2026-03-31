@@ -203,10 +203,21 @@ def main() -> None:
                 agenda_lines = _build_agenda_lines(events, target_date, vault_cfg.path, config, dry_run=True)
                 for line in agenda_lines:
                     print(line)
-        elif not daily_path.exists():
-            logging.error("Daily note not found: %s", daily_path)
-            sys.exit(1)
         else:
+            if not daily_path.exists():
+                cap_cfg = config.capture
+                if cap_cfg.daily_notes_template:
+                    template_path = Path(vault_cfg.path) / cap_cfg.daily_notes_template
+                    if template_path.exists():
+                        daily_path.parent.mkdir(parents=True, exist_ok=True)
+                        daily_path.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
+                        logging.info("Created daily note from template: %s", daily_path.name)
+                    else:
+                        logging.error("Daily note not found and template missing: %s", daily_path)
+                        sys.exit(1)
+                else:
+                    logging.error("Daily note not found: %s", daily_path)
+                    sys.exit(1)
             lines = daily_path.read_text(encoding="utf-8").splitlines(keepends=True)
             new_lines = inject_agenda(lines, target_date, vault_cfg.path, config)
             if new_lines != lines:
