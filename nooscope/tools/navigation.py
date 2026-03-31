@@ -15,6 +15,23 @@ def read_note(
     vault_root: str,
     vault_id: int | None = None,
 ) -> dict:
+    """Read a note's content, frontmatter, and backlinks.
+
+    Tries the DB index first for content, falling back to reading the file
+    directly if the note is not indexed. Backlinks are always fetched from
+    the DB.
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        file_path: Vault-relative path to the markdown file.
+        vault_root: Absolute filesystem path to the vault root.
+        vault_id: Vault scope for the DB query. None searches across all vaults.
+
+    Returns:
+        Dict with keys ``file_path``, ``frontmatter`` (JSON string or None),
+        ``content`` (str or None — DB chunk-0 content or raw file text),
+        and ``backlinks`` (list of dicts from ``get_backlinks``).
+    """
     abs_path = os.path.join(vault_root, file_path) if not os.path.isabs(file_path) else file_path
     try:
         with open(abs_path, encoding="utf-8", errors="replace") as f:
@@ -46,6 +63,23 @@ def list_notes(
     tags: list[str] | None = None,
     limit: int = 50,
 ) -> list[dict]:
+    """List indexed notes, optionally filtered by folder and tags.
+
+    Tags are matched by substring against the raw ``frontmatter`` JSON column,
+    so every tag in the list must appear in the frontmatter for a note to match.
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        folder: Vault-relative folder prefix (e.g. ``"Projects"``). None returns
+            all folders.
+        vault_id: Vault scope. None includes all vaults.
+        tags: List of tag strings to filter by. None applies no tag filter.
+        limit: Maximum number of results, ordered by most-recently-modified.
+
+    Returns:
+        List of dicts with keys ``file_path``, ``title``, ``modified_at``,
+        and ``word_count``.
+    """
     where_clauses = ["chunk_index=0"]
     params: list = []
 
@@ -85,6 +119,21 @@ def get_backlinks(
     file_path: str,
     vault_id: int | None = None,
 ) -> list[dict]:
+    """Find all indexed notes that contain a wikilink to the given file.
+
+    Matches both ``[[Stem]]`` and ``[[Stem|alias]]`` patterns by searching the
+    stored chunk-0 content for the file stem.
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        file_path: Vault-relative path of the target note.
+        vault_id: Vault scope. None searches all vaults.
+
+    Returns:
+        List of dicts with keys ``file_path``, ``title``, and
+        ``context_snippet`` (first matching line containing the link, up to
+        200 characters).
+    """
     stem = Path(file_path).stem
 
     where = "(content LIKE ? OR content LIKE ?)"

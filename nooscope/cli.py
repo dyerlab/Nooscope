@@ -7,6 +7,13 @@ import sys
 
 
 def main() -> None:
+    """Parse CLI arguments and dispatch to the appropriate subcommand handler.
+
+    Subcommands: ``rebuild``, ``watch``, ``serve``, ``capture``, ``queue``,
+    ``flush``, ``log``, ``flush-logs``, and ``inject-agenda``. The config file
+    is resolved from ``--config`` flag or the ``NOOSCOPE_CONFIG`` env var before
+    any subcommand logic runs.
+    """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     parser = argparse.ArgumentParser(prog="nooscope")
@@ -54,6 +61,7 @@ def main() -> None:
     config = load_config()
 
     def build_backends():
+        """Instantiate all configured embedding backends from the loaded config."""
         from nooscope.backends.ollama import OllamaBackend
         from nooscope.backends.openai import OpenAIBackend
         from nooscope.backends.mlx import MLXBackend

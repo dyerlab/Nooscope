@@ -26,6 +26,28 @@ def search(
     limit: int = 10,
     threshold: float = 0.6,
 ) -> list[dict]:
+    """Embed a query and return the most similar documents from the index.
+
+    Computes cosine similarity between the query vector and every stored
+    embedding of the specified type. Results below the threshold are discarded.
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        backends: Mapping of embedding-type name → backend instance.
+        query: Natural-language search string.
+        embedding_type: Embedding space to search (e.g. ``"semantic"``).
+        vault_id: Restrict results to this vault. None searches all vaults.
+        limit: Maximum number of results after sorting by similarity.
+        threshold: Minimum cosine similarity score; lower scores are excluded.
+
+    Returns:
+        List of result dicts ordered by descending similarity, each containing
+        ``file_path``, ``folder``, ``title``, ``section``, ``chunk_index``,
+        ``similarity``, ``content``, and ``source``.
+
+    Raises:
+        ValueError: If no backend is registered for ``embedding_type``.
+    """
     backend = backends.get(embedding_type)
     if backend is None:
         raise ValueError(f"No backend for embedding_type '{embedding_type}'")
@@ -83,6 +105,29 @@ def cross_space_search(
     vault_id: int | None = None,
     limit: int = 10,
 ) -> list[dict]:
+    """Find documents that score high in one embedding space but low in another.
+
+    Useful for surface notes that are semantically relevant but structurally
+    unusual (e.g. highly semantic but low-frequency-dependent), or vice versa.
+    Results are ranked by descending delta (score_high − score_low).
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        backends: Mapping of embedding-type name → backend instance.
+        query: Natural-language search string embedded in both spaces.
+        high_in: Embedding type expected to score high (e.g. ``"semantic"``).
+        low_in: Embedding type expected to score low (e.g. ``"fdl"``).
+        vault_id: Restrict results to this vault. None searches all vaults.
+        limit: Maximum number of results after ranking.
+
+    Returns:
+        List of dicts ordered by descending ``delta``, each containing
+        ``file_path``, ``folder``, ``title``, ``score_high``, ``score_low``,
+        ``delta``, ``content``, and ``source``.
+
+    Raises:
+        ValueError: If either ``high_in`` or ``low_in`` backend is not registered.
+    """
     high_backend = backends.get(high_in)
     low_backend = backends.get(low_in)
     if high_backend is None or low_backend is None:

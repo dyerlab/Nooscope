@@ -23,6 +23,7 @@ from nooscope.capture import (
     _append_log_bullet,
     _insert_bullet_into_lines,
     _create_from_template,
+    _flush_uri,
     _slugify,
     _note_filename,
     _render_note,
@@ -85,8 +86,18 @@ def test_note_filename_uses_title_slug(conn):
     pending = list_pending_captures(conn)
     capture = next(c for c in pending if c["id"] == cid)
     filename = _note_filename(capture)
-    assert "my-great-idea" in filename
+    assert "My Great Idea" in filename
     assert filename.endswith(".md")
+
+
+def test_note_filename_date_format(conn):
+    cid = queue_capture(conn, "Some content", title="Test")
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    filename = _note_filename(capture)
+    # Date should be YYYY.MM.DD HHMM
+    import re
+    assert re.match(r"\d{4}\.\d{2}\.\d{2}\.\d{4} ", filename)
 
 
 def test_note_filename_falls_back_to_content(conn):
@@ -94,7 +105,17 @@ def test_note_filename_falls_back_to_content(conn):
     pending = list_pending_captures(conn)
     capture = next(c for c in pending if c["id"] == cid)
     filename = _note_filename(capture)
-    assert "fallback" in filename
+    assert "Fallback content here" in filename
+
+
+def test_note_filename_strips_invalid_chars(conn):
+    cid = queue_capture(conn, "body", title="My Note: A/B Test")
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    filename = _note_filename(capture)
+    assert "/" not in filename
+    assert ":" not in filename
+    assert "My Note" in filename
 
 
 def test_render_note_includes_frontmatter(conn):
@@ -339,3 +360,50 @@ def test_build_bullet_no_refs():
 def test_build_bullet_with_refs():
     result = _build_bullet("Working", ["Nooscope", "Alice"])
     assert result == "- logger:: Working [[Nooscope]] [[Alice]]"
+
+
+def test_render_note_strips_existing_frontmatter(conn):
+    content_with_fm = "---\naliases:\n  - Foo\ntags:\n  - bar\n---\n\nActual body here."
+    cid = queue_capture(conn, content_with_fm, tags=["idea"])
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    rendered = _render_note(capture)
+    # Only one frontmatter block
+    assert rendered.count("---") == 2
+    # Our metadata present
+    assert "source: cli" in rendered
+    assert "- idea" in rendered
+    # Content body preserved, original frontmatter gone
+    assert "Actual body here." in rendered
+    assert "aliases:" not in rendered
+
+
+def test_render_note_plain_content_unchanged(conn):
+    cid = queue_capture(conn, "No frontmatter here.")
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    rendered = _render_note(capture)
+    assert rendered.count("---") == 2
+    assert "No frontmatter here." in rendered
+
+
+def test_flush_uri_percent_encodes_spaces(conn):
+    cid = queue_capture(conn, "Hello world", title="My Note")
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    with patch("nooscope.capture.subprocess.run") as mock_run:
+        _flush_uri(capture, "MyVault", "_inbox")
+    url = mock_run.call_args[0][0][1]
+    assert "+" not in url
+    assert "%20" in url or "Hello%20world" in url or "My%20Note" in url
+
+
+def test_flush_uri_preserves_folder_separator(conn):
+    cid = queue_capture(conn, "Content", title="Note")
+    pending = list_pending_captures(conn)
+    capture = next(c for c in pending if c["id"] == cid)
+    with patch("nooscope.capture.subprocess.run") as mock_run:
+        _flush_uri(capture, "MyVault", "_inbox")
+    url = mock_run.call_args[0][0][1]
+    # The name parameter must contain a literal / so Obsidian creates the subfolder
+    assert "name=_inbox/" in url

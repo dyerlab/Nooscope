@@ -72,6 +72,21 @@ def _extract_title(post: frontmatter.Post, file_path: str) -> str:
 
 
 def parse_document(file_path: str, vault_root: str) -> dict:
+    """Parse a markdown file and return its metadata and content fields.
+
+    Reads the file, strips YAML frontmatter, extracts a title, computes a
+    content hash, and detects whether the note is a Map of Content.
+
+    Args:
+        file_path: Absolute path to the markdown file.
+        vault_root: Absolute path to the vault root, used to compute the
+            vault-relative ``file_path`` stored in the result.
+
+    Returns:
+        Dict with keys: ``file_path`` (vault-relative), ``title``, ``content``,
+        ``frontmatter_json``, ``frontmatter`` (dict), ``content_hash``,
+        ``modified_at`` (Unix timestamp), ``word_count``, and ``is_moc``.
+    """
     rel_path = os.path.relpath(file_path, vault_root)
     stat = os.stat(file_path)
     modified_at = stat.st_mtime
@@ -102,6 +117,23 @@ def parse_document(file_path: str, vault_root: str) -> dict:
 
 
 def chunk_document(doc: dict, max_tokens: int) -> list[dict]:
+    """Split a parsed document into embeddable chunks.
+
+    If the document fits within ``max_tokens`` words, returns a single
+    chunk (index 0). If it exceeds the limit and contains ``##`` headings,
+    splits at each heading into chunks 1..N; the caller is responsible for
+    computing a barycenter for chunk 0. Oversized documents without headings
+    are returned as a single chunk (index 0) regardless of length.
+
+    Args:
+        doc: Dict produced by ``parse_document``.
+        max_tokens: Approximate word-count threshold before splitting is attempted.
+
+    Returns:
+        List of chunk dicts, each with keys ``chunk_index``, ``section``,
+        ``content``, ``word_count``, and ``parent_id`` (always None here;
+        set by the caller after the parent row is inserted).
+    """
     chunks = [
         {
             "chunk_index": 0,
@@ -154,6 +186,26 @@ def index_file(
     config,
     defer_moc: bool = False,
 ) -> None:
+    """Parse, chunk, embed, and store a single markdown file.
+
+    Three embedding strategies are used depending on the document:
+    - MOC notes: barycenter of referenced-file embeddings (or direct if ``defer_moc``).
+    - Chunked notes: embed each ``##`` section separately; derive the parent vector
+      as the barycenter of the section embeddings.
+    - Short notes: embed the full document directly.
+
+    Also updates the watcher state record for incremental change detection.
+
+    Args:
+        conn: Open SQLite connection.
+        vault_id: Vault scope for all DB writes.
+        file_path: Absolute path to the markdown file.
+        vault_root: Absolute path to the vault root.
+        backends: Mapping of embedding-type name → backend instance.
+        config: Loaded ``Config`` object.
+        defer_moc: If True, skip barycenter computation for MOC notes; used
+            when calling from the first pass of ``rebuild_vault``.
+    """
     from nooscope.barycenter import update_chunk_barycenter, update_moc_barycenter
 
     doc = parse_document(file_path, vault_root)
@@ -231,6 +283,24 @@ def index_file(
 
 
 def rebuild_vault(conn, vault_id: int, vault_root: str, backends: dict[str, EmbeddingBackend], config) -> dict:
+    """Perform a full two-pass reindex of the vault and prune deleted files.
+
+    First pass indexes all non-MOC files so their embeddings exist. Second
+    pass indexes MOC files so their barycenters can reference the first-pass
+    results. After both passes, any DB-tracked file that no longer exists on
+    disk is deleted from the index.
+
+    Args:
+        conn: Open SQLite connection.
+        vault_id: Vault scope.
+        vault_root: Absolute path to the vault root.
+        backends: Mapping of embedding-type name → backend instance.
+        config: Loaded ``Config`` object; supplies ignore patterns and chunking settings.
+
+    Returns:
+        Dict with keys ``reindexed`` (int), ``skipped`` (int), and ``errors``
+        (list of ``{"file": str, "error": str}`` dicts).
+    """
     from nooscope.barycenter import update_moc_barycenter
 
     results = {"reindexed": 0, "skipped": 0, "errors": []}

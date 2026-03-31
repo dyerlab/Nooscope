@@ -39,7 +39,7 @@ class MCPConfig:
 @dataclass
 class CaptureConfig:
     flush_method: str = "uri"          # uri | inbox | rest
-    inbox_folder: str = "_inbox"
+    inbox_folder: str = ""              # empty = vault root; set to e.g. "_inbox" for a subfolder
     obsidian_vault_name: str = ""      # must match Obsidian's vault display name
     rest_port: int = 27123
     rest_api_key: str = ""
@@ -69,6 +69,22 @@ class Config:
 
 
 def load_config(path: str | None = None) -> Config:
+    """Load and parse the Nooscope YAML configuration file.
+
+    Resolves the config path in order: explicit argument → ``NOOSCOPE_CONFIG``
+    env var → ``./nooscope.yaml`` → ``~/.config/nooscope/nooscope.yaml``.
+
+    Args:
+        path: Explicit path to ``nooscope.yaml``. Pass ``None`` to use automatic
+            resolution.
+
+    Returns:
+        A fully-populated ``Config`` dataclass with nested vault, embedding,
+        chunking, MCP, capture, and calendar sub-configs.
+
+    Raises:
+        FileNotFoundError: If no config file can be located.
+    """
     if path is None:
         path = os.environ.get("NOOSCOPE_CONFIG")
     if path is None:
@@ -121,7 +137,7 @@ def load_config(path: str | None = None) -> Config:
     raw_cap = raw.get("capture", {})
     capture = CaptureConfig(
         flush_method=raw_cap.get("flush_method", "uri"),
-        inbox_folder=raw_cap.get("inbox_folder", "_inbox"),
+        inbox_folder=raw_cap.get("inbox_folder", ""),
         obsidian_vault_name=raw_cap.get("obsidian_vault_name", ""),
         rest_port=raw_cap.get("rest_port", 27123),
         rest_api_key=raw_cap.get("rest_api_key", ""),

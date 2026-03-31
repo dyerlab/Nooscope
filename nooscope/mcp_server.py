@@ -11,6 +11,7 @@ from nooscope.tools.search import search as _search, cross_space_search as _cros
 from nooscope.tools.navigation import read_note as _read_note, list_notes as _list_notes, get_backlinks as _get_backlinks
 from nooscope.tools.analysis import vault_stats as _vault_stats
 from nooscope.tools.management import rebuild_tool as _rebuild_tool
+from nooscope.tools.writing import write_note as _write_note
 from nooscope.capture import queue_capture as _queue_capture, log_entry as _log_entry, flush_log_entries as _flush_log_entries
 
 mcp = FastMCP("nooscope")
@@ -32,6 +33,20 @@ def search(
     limit: int = 10,
     threshold: float = 0.6,
 ) -> list[dict]:
+    """Semantic vector search over the vault index.
+
+    Args:
+        query: Natural-language search string.
+        embedding_type: Embedding space to search (default ``"semantic"``).
+        vault: Vault name to restrict results to. None targets the only/first vault.
+        limit: Maximum number of results to return.
+        threshold: Minimum cosine similarity score for a result to be included.
+
+    Returns:
+        List of result dicts ordered by descending similarity, each containing
+        ``file_path``, ``title``, ``section``, ``chunk_index``, ``similarity``,
+        ``content``, ``folder``, and ``source``.
+    """
     s = _get_state()
     vault_id = _resolve_vault_id(s, vault)
     return _search(
@@ -47,6 +62,17 @@ def search(
 
 @mcp.tool()
 def read_note(file_path: str, vault: str | None = None) -> dict:
+    """Read a note's content, frontmatter, and backlinks from the vault.
+
+    Args:
+        file_path: Vault-relative path to the markdown file (e.g.
+            ``"Projects/Nooscope.md"``).
+        vault: Vault name to scope the lookup. None uses the first vault.
+
+    Returns:
+        Dict with keys ``file_path``, ``frontmatter`` (JSON string or None),
+        ``content`` (str or None), and ``backlinks`` (list of dicts).
+    """
     s = _get_state()
     vault_id, vault_root = _resolve_vault(s, vault)
     return _read_note(s["conn"], file_path, vault_root, vault_id=vault_id)
@@ -59,6 +85,20 @@ def list_notes(
     tags: list[str] | None = None,
     limit: int = 50,
 ) -> list[dict]:
+    """List notes from the vault index, optionally filtered by folder or tags.
+
+    Args:
+        folder: Vault-relative folder prefix to restrict results (e.g. ``"Projects"``).
+            None returns notes from all folders.
+        vault: Vault name to scope the query. None uses the first vault.
+        tags: List of tag strings; only notes whose frontmatter JSON contains all
+            listed tags are returned.
+        limit: Maximum number of results, ordered by most-recently-modified.
+
+    Returns:
+        List of dicts with keys ``file_path``, ``title``, ``modified_at``,
+        and ``word_count``.
+    """
     s = _get_state()
     vault_id = _resolve_vault_id(s, vault)
     return _list_notes(s["conn"], folder=folder, vault_id=vault_id, tags=tags, limit=limit)
@@ -66,6 +106,16 @@ def list_notes(
 
 @mcp.tool()
 def get_backlinks(file_path: str, vault: str | None = None) -> list[dict]:
+    """Find all notes in the vault index that link to the given note.
+
+    Args:
+        file_path: Vault-relative path of the target note.
+        vault: Vault name to scope the query. None uses the first vault.
+
+    Returns:
+        List of dicts with keys ``file_path``, ``title``, and
+        ``context_snippet`` (the line containing the wikilink, up to 200 chars).
+    """
     s = _get_state()
     vault_id = _resolve_vault_id(s, vault)
     return _get_backlinks(s["conn"], file_path, vault_id=vault_id)
@@ -73,6 +123,15 @@ def get_backlinks(file_path: str, vault: str | None = None) -> list[dict]:
 
 @mcp.tool()
 def vault_stats(vault: str | None = None) -> dict:
+    """Return index statistics for the vault.
+
+    Args:
+        vault: Vault name to scope the query. None uses the first vault.
+
+    Returns:
+        Dict with keys ``note_count``, ``indexed_count``, ``pending_count``,
+        ``embedding_types`` (list of str), and ``last_indexed`` (Unix timestamp or None).
+    """
     s = _get_state()
     vault_id = _resolve_vault_id(s, vault)
     return _vault_stats(s["conn"], vault_id=vault_id)
@@ -80,6 +139,17 @@ def vault_stats(vault: str | None = None) -> dict:
 
 @mcp.tool()
 def rebuild(vault: str | None = None, embedding_type: str | None = None) -> dict:
+    """Trigger a full vault reindex from the MCP server context.
+
+    Args:
+        vault: Vault name to reindex. None uses the first vault.
+        embedding_type: Restrict reindexing to a single embedding type. None
+            processes all configured backends.
+
+    Returns:
+        Dict with keys ``reindexed`` (int), ``skipped`` (int), and ``errors``
+        (list of ``{"file": str, "error": str}`` dicts).
+    """
     s = _get_state()
     vault_id, vault_root = _resolve_vault(s, vault)
     return _rebuild_tool(
@@ -107,6 +177,39 @@ def capture_thought(
     s = _get_state()
     capture_id = _queue_capture(s["conn"], content, title=title, tags=tags or [], source=source)
     return {"id": capture_id, "status": "queued"}
+
+
+@mcp.tool()
+def write_note(
+    path: str,
+    content: str,
+    vault: str | None = None,
+) -> dict:
+    """Create or overwrite a note at an explicit vault-relative path.
+
+    Use this for structured, named documents where the destination is known:
+    skills, reference notes, project files, templates. Writes immediately with
+    no queue. Parent directories are created automatically.
+
+    Prefer this over ``capture_thought`` when:
+    - The note has a permanent, meaningful name (not a timestamped capture)
+    - The content may need to be updated or refined in future sessions
+    - The destination folder is part of the note's identity (e.g. skills live
+      in ``Resources/Agents/Skills/``)
+
+    Args:
+        path: Vault-relative path including filename and .md extension
+            (e.g. ``"Resources/Agents/Skills/commit.md"``).
+        content: Full markdown content to write.
+        vault: Vault name to write into. None uses the first vault.
+
+    Returns:
+        Dict with keys ``path``, ``action`` (``"created"`` or ``"updated"``),
+        and ``size`` (character count written).
+    """
+    s = _get_state()
+    _, vault_root = _resolve_vault(s, vault)
+    return _write_note(vault_root, path, content)
 
 
 @mcp.tool()
@@ -236,6 +339,16 @@ def generate_vault_layout(vault: str | None = None) -> dict:
 
 
 def _resolve_vault_id(state: dict, vault_name: str | None) -> int | None:
+    """Resolve an optional vault name to its integer DB ID.
+
+    Args:
+        state: Server state dict produced by ``main()``.
+        vault_name: Vault name to look up, or None to use the single configured vault.
+
+    Returns:
+        Integer vault ID, or None if the name is not found or multiple vaults exist
+        and no name was specified.
+    """
     if vault_name is None:
         vaults = state["config"].vaults
         if len(vaults) == 1:
@@ -245,6 +358,17 @@ def _resolve_vault_id(state: dict, vault_name: str | None) -> int | None:
 
 
 def _resolve_vault(state: dict, vault_name: str | None) -> tuple[int | None, str]:
+    """Resolve an optional vault name to its DB ID and filesystem root path.
+
+    Falls back to the first configured vault when vault_name is None or not found.
+
+    Args:
+        state: Server state dict produced by ``main()``.
+        vault_name: Vault name to look up, or None to use the first vault.
+
+    Returns:
+        Tuple of (vault_id or None, vault_root_path).
+    """
     config = state["config"]
     if vault_name is None:
         vc = config.vaults[0]
@@ -255,6 +379,14 @@ def _resolve_vault(state: dict, vault_name: str | None) -> tuple[int | None, str
 
 
 def _build_backends(config) -> dict:
+    """Instantiate embedding backends from the loaded configuration.
+
+    Args:
+        config: Loaded ``Config`` object with ``embedding_types`` populated.
+
+    Returns:
+        Mapping of embedding-type name (e.g. ``"semantic"``) → backend instance.
+    """
     backends = {}
     for etype, ecfg in config.embedding_types.items():
         if ecfg.backend == "ollama":
@@ -299,6 +431,12 @@ def _load_vault_layout(config) -> str:
 
 
 def main() -> None:
+    """Initialise state and start the FastMCP server (stdio transport by default).
+
+    Reads config, builds embedding backends, opens DB connections for every
+    configured vault, sets MCP server instructions from the vault layout document,
+    then blocks running the MCP event loop.
+    """
     config_path = os.environ.get("NOOSCOPE_CONFIG")
     config = load_config(config_path)
 

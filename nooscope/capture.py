@@ -29,6 +29,19 @@ def queue_capture(
     source: str = "cli",
     metadata: dict | None = None,
 ) -> int:
+    """Insert a new capture into the pending queue and return its row ID.
+
+    Args:
+        conn: Open SQLite connection.
+        content: Body text of the note to capture.
+        title: Optional note title; used for filename generation if provided.
+        tags: Optional list of tag strings to attach to the note.
+        source: Originator label (e.g. ``"cli"``, ``"mcp"``).
+        metadata: Optional extra JSON-serialisable fields.
+
+    Returns:
+        The integer primary key of the newly inserted pending capture.
+    """
     return insert_pending_capture(conn, content, title, tags or [], source, metadata or {})
 
 
@@ -39,11 +52,29 @@ def _slugify(text: str, max_len: int = 40) -> str:
     return text[:max_len]
 
 
+def _clean_title(text: str, max_len: int = 60) -> str:
+    """Sanitize text for use as a macOS filename, preserving spaces and case.
+
+    Strips characters invalid on macOS (forward slash, colon, null byte) and
+    collapses runs of whitespace. Does not lower-case or replace spaces.
+
+    Args:
+        text: Raw title or content snippet.
+        max_len: Maximum character length of the returned string.
+
+    Returns:
+        A filename-safe string with spaces preserved, truncated to max_len.
+    """
+    text = re.sub(r"[/:\x00]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len].strip()
+
+
 def _note_filename(capture: dict) -> str:
     ts = datetime.fromtimestamp(capture["created_at"], tz=timezone.utc)
-    date_str = ts.strftime("%Y-%m-%d-%H%M")
-    slug = _slugify(capture["title"] or capture["content"])
-    return f"{date_str}-{slug}.md"
+    date_str = ts.strftime("%Y.%m.%d.%H%M")
+    title = _clean_title(capture["title"] or capture["content"])
+    return f"{date_str} {title}.md"
 
 
 def _render_note(capture: dict) -> str:
@@ -55,13 +86,17 @@ def _render_note(capture: dict) -> str:
         for t in tags:
             t = t.lstrip("#")
             lines.append(f"  - {t}")
-    lines += ["---", "", capture["content"]]
+    # Strip any leading frontmatter from the content to avoid double --- blocks
+    # when the captured text already contains its own YAML frontmatter.
+    content = re.sub(r"^---\n.*?\n---\n?", "", capture["content"], flags=re.DOTALL).lstrip("\n")
+    lines += ["---", "", content]
     return "\n".join(lines)
 
 
 def _flush_uri(capture: dict, vault_name: str, inbox_folder: str) -> None:
     filename = _note_filename(capture)
-    note_path = f"{inbox_folder}/{filename[:-3]}"  # strip .md — Obsidian adds it
+    stem = filename[:-3]  # strip .md — Obsidian adds it
+    note_path = f"{inbox_folder}/{stem}" if inbox_folder else stem
     content = _render_note(capture)
 
     # Obsidian URI has a practical content length limit (~2000 chars).
@@ -69,26 +104,26 @@ def _flush_uri(capture: dict, vault_name: str, inbox_folder: str) -> None:
     if len(content) > 1800:
         content = _render_note({**capture, "content": capture["content"][:1600] + "\n\n[truncated — see nooscope queue]"})
 
-    params = urllib.parse.urlencode({
-        "vault": vault_name,
-        "name": note_path,
-        "content": content,
-    })
-    url = f"obsidian://new?{params}"
+    # Use percent-encoding (not form-encoding) — Obsidian's URI handler requires
+    # %20 for spaces, not +. The name parameter must preserve / for folder structure.
+    vault_enc = urllib.parse.quote(vault_name, safe="")
+    name_enc = urllib.parse.quote(note_path, safe="/")
+    content_enc = urllib.parse.quote(content, safe="")
+    url = f"obsidian://new?vault={vault_enc}&name={name_enc}&content={content_enc}"
     subprocess.run(["open", url], check=True)
 
 
 def _flush_inbox(capture: dict, vault_root: str, inbox_folder: str) -> None:
-    inbox_path = Path(vault_root) / inbox_folder
-    inbox_path.mkdir(parents=True, exist_ok=True)
+    from nooscope.tools.writing import _write_vault_file
     filename = _note_filename(capture)
-    (inbox_path / filename).write_text(_render_note(capture), encoding="utf-8")
+    path = f"{inbox_folder}/{filename}" if inbox_folder else filename
+    _write_vault_file(vault_root, path, _render_note(capture))
 
 
 def _flush_rest(capture: dict, inbox_folder: str, port: int, api_key: str) -> None:
     import httpx
     filename = _note_filename(capture)
-    note_path = f"{inbox_folder}/{filename}"
+    note_path = f"{inbox_folder}/{filename}" if inbox_folder else filename
     url = f"http://localhost:{port}/vault/{urllib.parse.quote(note_path)}"
     headers = {"Content-Type": "text/markdown"}
     if api_key:
@@ -275,6 +310,21 @@ def flush_log_entries(conn, vault_root: str, config, poll: bool = False) -> dict
 
 
 def flush_captures(conn, config) -> dict:
+    """Flush all pending captures to the Obsidian inbox via the configured method.
+
+    Iterates every ``status='pending'`` capture and dispatches it using
+    ``capture.flush_method`` (``uri``, ``inbox``, or ``rest``). Each capture is
+    marked ``flushed`` on success or ``failed`` on error.
+
+    Args:
+        conn: Open SQLite connection.
+        config: Loaded ``Config`` object supplying ``capture`` and ``vaults`` settings.
+
+    Returns:
+        Dict with keys ``flushed`` (int), ``failed`` (int), ``errors`` (list of
+        ``{"id": int, "error": str}`` dicts), and ``previews`` (list of
+        ``{"id", "filename", "source"}`` dicts for every item processed).
+    """
     pending = list_pending_captures(conn)
     results: dict = {"flushed": 0, "failed": 0, "errors": [], "previews": []}
 

@@ -43,7 +43,21 @@ def _meaningful_words(title: str, max_words: int = 4) -> list[str]:
 
 
 def meeting_note_slug(event_date: date, title: str, organizer: dict | None) -> str:
-    """Build the note filename stem (no .md extension)."""
+    """Build the note filename stem (without .md extension) for a meeting event.
+
+    Combines the ISO date, meaningful words from the event title (stop words
+    removed), and optionally the organizer's last name.
+
+    Args:
+        event_date: Date the event occurs.
+        title: Calendar event title; common meeting words are filtered out.
+        organizer: Organizer info dict (as returned by the calendar reader), or
+            None. If the organizer is not the current user, their last name is
+            appended to the slug.
+
+    Returns:
+        Filename stem string, e.g. ``"2026-03-31-quarterly-review-smith"``.
+    """
     date_str = event_date.strftime("%Y-%m-%d")
     words = _meaningful_words(title)
     title_part = "-".join(words) if words else _slugify(title)[:30]

@@ -4,6 +4,18 @@ import sqlite3
 
 
 def vault_stats(conn: sqlite3.Connection, vault_id: int | None = None) -> dict:
+    """Return summary statistics about the vault index.
+
+    Args:
+        conn: Open SQLite connection with row_factory set.
+        vault_id: Restrict counts to this vault. None aggregates all vaults.
+
+    Returns:
+        Dict with keys ``note_count`` (distinct files tracked), ``indexed_count``
+        (files with at least one embedding), ``pending_count`` (unembedded files),
+        ``embedding_types`` (list of distinct type names), and ``last_indexed``
+        (Unix timestamp of the most recent indexing run, or None).
+    """
     where = "WHERE vault_id=?" if vault_id else ""
     params = [vault_id] if vault_id else []
 
