@@ -2,6 +2,8 @@
 
 A sidecar MCP (Model Context Protocol) server for Obsidian vaults. Maintains a local SQLite vector index of your markdown notes and exposes semantic search, navigation, and capture tools to Claude Code and Claude Desktop.
 
+A longer discussion and rationalle for this project was posted to my [blog](https://www.rodneydyer.com/your-vault-your-vectors-building-a-local-first-mcp-server-for-obsidian/) on 29 March 2026.
+
 ## Prerequisites
 
 - Python 3.11+
