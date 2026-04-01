@@ -23,11 +23,11 @@ from nooscope.capture import (
     _append_log_bullet,
     _insert_bullet_into_lines,
     _create_from_template,
-    _flush_uri,
     _slugify,
     _note_filename,
     _render_note,
 )
+from nooscope.obsidian import flush_uri as _flush_uri
 
 
 @pytest.fixture
@@ -138,10 +138,7 @@ def test_flush_inbox_method(conn, tmp_path):
     cfg = MagicMock()
     cfg.capture.flush_method = "inbox"
     cfg.capture.inbox_folder = "_inbox"
-    cfg.capture.obsidian_vault_name = "TestVault"
-    cfg.capture.rest_port = 27123
-    cfg.capture.rest_api_key = ""
-    cfg.vaults = [MagicMock(path=str(vault_root))]
+    cfg.vaults = [MagicMock(path=str(vault_root), obsidian_mode=False)]
 
     results = flush_captures(conn, cfg)
     assert results["flushed"] == 1
@@ -163,31 +160,44 @@ def test_flush_marks_status_flushed(conn, tmp_path):
     cfg = MagicMock()
     cfg.capture.flush_method = "inbox"
     cfg.capture.inbox_folder = "_inbox"
-    cfg.vaults = [MagicMock(path=str(vault_root))]
+    cfg.vaults = [MagicMock(path=str(vault_root), obsidian_mode=False)]
 
     flush_captures(conn, cfg)
     pending = list_pending_captures(conn)
     assert all(c["id"] != cid for c in pending)
 
 
-def test_flush_uri_missing_vault_name_fails(conn):
+def test_flush_uri_requires_obsidian_mode(conn):
     queue_capture(conn, "URI thought")
 
     cfg = MagicMock()
     cfg.capture.flush_method = "uri"
-    cfg.capture.obsidian_vault_name = ""
-    cfg.vaults = [MagicMock(path="/some/path")]
+    cfg.vaults = [MagicMock(path="/some/path", obsidian_mode=False)]
 
     results = flush_captures(conn, cfg)
     assert results["failed"] == 1
     assert results["flushed"] == 0
+    assert "obsidian_mode" in results["errors"][0]["error"]
+
+
+def test_flush_rest_requires_obsidian_mode(conn):
+    queue_capture(conn, "REST thought")
+
+    cfg = MagicMock()
+    cfg.capture.flush_method = "rest"
+    cfg.vaults = [MagicMock(path="/some/path", obsidian_mode=False)]
+
+    results = flush_captures(conn, cfg)
+    assert results["failed"] == 1
+    assert results["flushed"] == 0
+    assert "obsidian_mode" in results["errors"][0]["error"]
 
 
 def test_flush_empty_queue(conn, tmp_path):
     cfg = MagicMock()
     cfg.capture.flush_method = "inbox"
     cfg.capture.inbox_folder = "_inbox"
-    cfg.vaults = [MagicMock(path=str(tmp_path))]
+    cfg.vaults = [MagicMock(path=str(tmp_path), obsidian_mode=False)]
 
     results = flush_captures(conn, cfg)
     assert results["flushed"] == 0
@@ -196,14 +206,15 @@ def test_flush_empty_queue(conn, tmp_path):
 
 # --- log_entry tests ---
 
-def _log_config(vault_root, template=False):
+def _log_config(vault_root, template=False, obsidian_mode=False, log_prefix="- "):
     cfg = MagicMock()
     cfg.capture.daily_notes_folder = "Daily"
     cfg.capture.daily_notes_format = "%Y-%m-%d"
     cfg.capture.log_section = "Notes"
+    cfg.capture.log_prefix = log_prefix
     cfg.capture.obsidian_vault_name = ""
     cfg.capture.daily_notes_template = "Templates/Daily.md" if template else ""
-    cfg.vaults = [MagicMock(path=str(vault_root))]
+    cfg.vaults = [MagicMock(path=str(vault_root), obsidian_mode=obsidian_mode)]
     return cfg
 
 
@@ -248,10 +259,10 @@ def test_log_entry_creates_from_template(conn, tmp_path):
     # Template content preserved (including <%-style tags if present)
     assert "tags:" in note
     assert "## Notes" in note
-    # Logger entry inserted
-    assert "logger:: Template test [[Nooscope]]" in note
+    # Log entry inserted with default prefix
+    assert "- Template test [[Nooscope]]" in note
     # Entry appears before ## Tasks
-    assert note.index("logger::") < note.index("## Tasks")
+    assert note.index("- Template test") < note.index("## Tasks")
 
 
 def test_create_from_template_preserves_templater_tags(conn, tmp_path):
@@ -264,7 +275,7 @@ def test_create_from_template_preserves_templater_tags(conn, tmp_path):
     note = (tmp_path / "Daily" / "2024-01-10.md").read_text()
     # Templater tags must be left untouched for Obsidian to process
     assert "<% tp.web.daily_quote() %>" in note
-    assert "logger:: Tag test" in note
+    assert "- Tag test" in note
 
 
 def test_log_entry_writes_when_note_exists(conn, tmp_path):
@@ -273,18 +284,18 @@ def test_log_entry_writes_when_note_exists(conn, tmp_path):
     today = date(2024, 1, 10)
     result = log_entry(conn, str(tmp_path), "Testing Nooscope", ["Nooscope"], cfg, today=today, poll=False)
     assert result["status"] == "written"
-    assert "logger:: Testing Nooscope [[Nooscope]]" in note.read_text()
+    assert "- Testing Nooscope [[Nooscope]]" in note.read_text()
 
 
 def test_log_entry_appends_to_existing_note(conn, tmp_path):
     cfg = _log_config(tmp_path)
     note = _make_daily(tmp_path, "2024-01-10",
-        "---\ntags:\n  - Daily\n---\n\n## Notes\n- logger:: First entry\n\n## Files\n")
+        "---\ntags:\n  - Daily\n---\n\n## Notes\n- First entry\n\n## Files\n")
     today = date(2024, 1, 10)
     log_entry(conn, str(tmp_path), "Second entry", [], cfg, today=today, poll=False)
     content = note.read_text()
-    assert "logger:: First entry" in content
-    assert "logger:: Second entry" in content
+    assert "- First entry" in content
+    assert "- Second entry" in content
     assert content.index("Second entry") < content.index("## Files")
 
 
@@ -313,7 +324,7 @@ def test_log_entry_creates_missing_section(conn, tmp_path):
     log_entry(conn, str(tmp_path), "Missing section entry", [], cfg, today=today, poll=False)
     content = note.read_text()
     assert "## Notes" in content
-    assert "logger:: Missing section entry" in content
+    assert "- Missing section entry" in content
 
 
 def test_log_entry_uses_actual_today_by_default(conn, tmp_path):
@@ -325,7 +336,7 @@ def test_log_entry_uses_actual_today_by_default(conn, tmp_path):
         mock_date.fromisoformat.side_effect = date.fromisoformat
         log_entry(conn, str(tmp_path), "Dynamic date entry", [], cfg, poll=False)
     expected_file = tmp_path / "Daily" / "2025-06-15.md"
-    assert "logger:: Dynamic date entry" in expected_file.read_text()
+    assert "- Dynamic date entry" in expected_file.read_text()
 
 
 def test_flush_log_entries_retries_pending(conn, tmp_path):
@@ -339,7 +350,7 @@ def test_flush_log_entries_retries_pending(conn, tmp_path):
     results = flush_log_entries(conn, str(tmp_path), cfg, poll=False)
     assert results["written"] == 1
     assert results["still_pending"] == 0
-    assert "logger:: Retry me [[Nooscope]]" in note.read_text()
+    assert "- Retry me [[Nooscope]]" in note.read_text()
 
 
 def test_flush_log_entries_respects_target_date(conn, tmp_path):
@@ -350,16 +361,21 @@ def test_flush_log_entries_respects_target_date(conn, tmp_path):
     note_jan10 = _make_daily(tmp_path, "2024-01-10", "---\n---\n\n## Notes\n")
     results = flush_log_entries(conn, str(tmp_path), cfg, poll=False)
     assert results["written"] == 1
-    assert "logger:: Past entry" in note_jan10.read_text()
+    assert "- Past entry" in note_jan10.read_text()
 
 
 def test_build_bullet_no_refs():
-    assert _build_bullet("Hello world", None) == "- logger:: Hello world"
+    assert _build_bullet("Hello world", None) == "- Hello world"
 
 
 def test_build_bullet_with_refs():
     result = _build_bullet("Working", ["Nooscope", "Alice"])
-    assert result == "- logger:: Working [[Nooscope]] [[Alice]]"
+    assert result == "- Working [[Nooscope]] [[Alice]]"
+
+
+def test_build_bullet_custom_prefix():
+    result = _build_bullet("Working", ["Nooscope"], prefix="logger:: ")
+    assert result == "logger:: Working [[Nooscope]]"
 
 
 def test_render_note_strips_existing_frontmatter(conn):
@@ -391,7 +407,7 @@ def test_flush_uri_percent_encodes_spaces(conn):
     cid = queue_capture(conn, "Hello world", title="My Note")
     pending = list_pending_captures(conn)
     capture = next(c for c in pending if c["id"] == cid)
-    with patch("nooscope.capture.subprocess.run") as mock_run:
+    with patch("nooscope.obsidian.subprocess.run") as mock_run:
         _flush_uri(capture, "MyVault", "_inbox")
     url = mock_run.call_args[0][0][1]
     assert "+" not in url
@@ -402,7 +418,7 @@ def test_flush_uri_preserves_folder_separator(conn):
     cid = queue_capture(conn, "Content", title="Note")
     pending = list_pending_captures(conn)
     capture = next(c for c in pending if c["id"] == cid)
-    with patch("nooscope.capture.subprocess.run") as mock_run:
+    with patch("nooscope.obsidian.subprocess.run") as mock_run:
         _flush_uri(capture, "MyVault", "_inbox")
     url = mock_run.call_args[0][0][1]
     # The name parameter must contain a literal / so Obsidian creates the subfolder

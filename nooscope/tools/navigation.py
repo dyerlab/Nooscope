@@ -119,10 +119,10 @@ def get_backlinks(
     file_path: str,
     vault_id: int | None = None,
 ) -> list[dict]:
-    """Find all indexed notes that contain a wikilink to the given file.
+    """Find all indexed notes that link to the given file.
 
-    Matches both ``[[Stem]]`` and ``[[Stem|alias]]`` patterns by searching the
-    stored chunk-0 content for the file stem.
+    Matches wikilinks (``[[Stem]]``, ``[[Stem|alias]]``) and standard markdown
+    relative links (``[text](../folder/Stem.md)``, ``[text](Stem.md)``).
 
     Args:
         conn: Open SQLite connection with row_factory set.
@@ -136,8 +136,15 @@ def get_backlinks(
     """
     stem = Path(file_path).stem
 
-    where = "(content LIKE ? OR content LIKE ?)"
-    params: list = [f"%[[{stem}]]%", f"%[[{stem}|%"]
+    # Match wikilinks: [[Stem]] or [[Stem|alias]]
+    # Match relative markdown links: (Stem.md) or (/Stem.md) covering any ../path/Stem.md
+    where = "(content LIKE ? OR content LIKE ? OR content LIKE ? OR content LIKE ?)"
+    params: list = [
+        f"%[[{stem}]]%",
+        f"%[[{stem}|%",
+        f"%/{stem}.md)%",
+        f"%({stem}.md)%",
+    ]
 
     if vault_id is not None:
         where += " AND vault_id=?"
@@ -155,7 +162,7 @@ def get_backlinks(
         lines = content.splitlines()
         snippet = ""
         for line in lines:
-            if stem in line and "[[" in line:
+            if stem in line and ("[[" in line or f"({stem}.md)" in line or f"/{stem}.md)" in line):
                 snippet = line.strip()[:200]
                 break
         results.append(

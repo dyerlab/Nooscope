@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Nooscope is a Python-based MCP (Model Context Protocol) server that maintains a local, multi-embedding vector index of Obsidian markdown vaults. It exposes semantic search, corpus analysis, and capture tools to AI assistants via MCP.
+Nooscope is a Python-based MCP (Model Context Protocol) server that maintains a local, multi-embedding vector index of markdown vaults. It exposes semantic search, navigation, and capture tools to AI assistants via MCP. The core pipeline is editor-agnostic: any folder of markdown files can be indexed and served.
 
-**Status:** Implemented and operational. The vault at `/Volumes/Developer/BrainTree` is indexed (~1,823 notes). The MCP server runs via `nooscope serve` and is registered with both Claude Code CLI and Claude Desktop. The file watcher runs automatically via LaunchAgent at login.
+**Status:** Implemented and operational. The active vault is the iCloud BrainTree folder (10 notes). The MCP server runs via `nooscope serve` and is registered with both Claude Code CLI and Claude Desktop. The file watcher runs automatically via LaunchAgent at login.
 
-The primary vault is at `/Volumes/Developer/BrainTree`. The project note is at `Projects/Nooscope.md` in that vault. Vault topology and folder conventions are documented in `References/VaultLayout.md` — consult this before asking questions about where things live.
+**Active vault:** `/Users/rodney/Library/Mobile Documents/com~apple~CloudDocs/BrainTree`
+**Project note:** `Projects/Nooscope.md` in that vault (create via `project-init` skill if it doesn't exist yet)
+**DB:** vault-local at `.nooscope/nooscope.db`
 
 ## Commands
 
@@ -23,14 +25,14 @@ nooscope rebuild                   # Full vault reindex; also prunes deleted fil
 nooscope watch                     # Start incremental file watcher (normally runs via LaunchAgent)
 nooscope serve                     # Start MCP server (stdio)
 
-nooscope log "text" --refs "Note,Person"   # Append logger:: to today's daily note
-nooscope log "text" --date 2026-04-01      # Log to a specific date's daily note
+nooscope log "text"                # Append bullet to today's daily note
+nooscope log "text" --date 2026.04.01   # Log to a specific date's daily note
 nooscope capture "text" --title "..." --tags "t1,t2"  # Queue a structured note
 nooscope queue                     # List pending captures
-nooscope flush                     # Flush queued captures to Obsidian inbox
+nooscope flush                     # Flush queued captures to vault inbox
 nooscope flush-logs                # Retry pending log entries
 nooscope inject-agenda             # Inject today's calendar events into daily note
-nooscope inject-agenda --date 2026-04-01   # Inject for a specific date
+nooscope inject-agenda --date 2026.04.01   # Inject for a specific date
 nooscope inject-agenda --dry-run   # Preview without writing
 ```
 
@@ -87,14 +89,15 @@ codesign --sign - --force ~/Applications/Nooscope.app
 ## Architecture
 
 ```
-Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope.db (SQLite)
-                                                                       ↓
-                                                        MCP Server (stdio)
-                                                        → Claude Code / Claude Desktop
+Vault (markdown folder) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope.db (SQLite)
+                                                                            ↓
+                                                             MCP Server (stdio)
+                                                             → Claude Code / Claude Desktop
 ```
 
 **Core principles:**
 - Vault is canonical truth. `.nooscope/nooscope.db` is a rebuildable derivative.
+- The pipeline is editor-agnostic. Obsidian-specific features activate only when `obsidian_mode: true` is set on the vault.
 - Nooscope is read-only with respect to the vault, with explicit exceptions: `log` and `inject-agenda` write to daily notes; `flush` and `write_note` write arbitrary notes to the vault.
 
 ### Module responsibilities
@@ -105,10 +108,11 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope
 - `nooscope/indexer.py` — Parse, chunk by `##` headings, embed, store; two-pass MOC handling; stale-file pruning on rebuild; `is_ignored()` for vault ignore patterns
 - `nooscope/barycenter.py` — MOC and chunk barycenter computation; results stored in both `barycenters` and `embeddings` tables for uniform search
 - `nooscope/watcher.py` — Incremental updates via watchdog; triggers `flush_log_entries` when a daily note is created; auto-flushes pending captures every 30 seconds; respects vault ignore patterns
-- `nooscope/capture.py` — Two capture modes: structured notes (queued → vault) and ephemeral log entries (written to daily note, queued if note doesn't exist yet)
+- `nooscope/capture.py` — Two capture modes: structured notes (queued → vault) and ephemeral log entries (written to daily note, queued if note doesn't exist yet). Log bullet prefix is configurable via `capture.log_prefix`.
+- `nooscope/obsidian.py` — **Obsidian-specific write path** (only used when `obsidian_mode: true`): `flush_uri`, `flush_rest`, `open_for_daily`, `wait_for_daily`, `require_obsidian_mode`
 - `nooscope/agenda_injector.py` — Injects calendar events into the `## Agenda` section of a daily note; falls back to a Claude-generated refresher when no events exist
 - `nooscope/calendar_reader.py` — EventKit bridge (via `pyobjc-framework-EventKit`) for reading macOS Calendar events without AppleScript
-- `nooscope/meeting_notes.py` — Creates per-event meeting notes in `References/Meetings/` with Claude-generated context
+- `nooscope/meeting_notes.py` — Creates per-event meeting notes with Claude-generated context
 - `nooscope/mcp_server.py` — FastMCP server with all tools; sets instructions via `mcp._mcp_server.instructions` (FastMCP 1.26+ has no public setter)
 - `nooscope/backends/` — Embedding backends implementing `EmbeddingBackend` from `base.py`
 - `nooscope/tools/` — MCP tool groups: `search`, `navigation`, `analysis`, `management`, `writing`
@@ -121,11 +125,11 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope
 | `cross_space_search` | Compare scores across two embedding types |
 | `read_note` | Read note content + frontmatter + backlinks |
 | `list_notes` | Browse by folder, tags, recency |
-| `get_backlinks` | Find all notes linking to a given note |
+| `get_backlinks` | Find all notes linking to a given note (matches both `[[wikilinks]]` and `[markdown](relative.md)` links) |
 | `vault_stats` | Index counts and status |
 | `capture_thought` | Queue a structured note for automatic flush to the vault |
 | `write_note` | Create or overwrite a note at an explicit vault-relative path |
-| `log_thought` | Append `logger::` entry to today's daily note |
+| `log_thought` | Append a log bullet to today's daily note |
 | `rebuild` | Full vault reindex |
 | `generate_vault_layout` | Scan vault and write `References/VaultLayout.md`; also reloads MCP server instructions |
 
@@ -134,7 +138,8 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope
 **Structured capture** (`capture_thought` / `nooscope capture`):
 - Queued in `pending_captures` table
 - Auto-flushed by the watcher every 30 seconds, or manually via `nooscope flush`
-- Three flush methods: `uri` (Obsidian URI — fragile, requires Obsidian open), `inbox` (direct write to disk — **recommended**), `rest` (Obsidian REST API plugin)
+- Default flush method is `inbox` (direct write to disk — no external dependencies)
+- `uri` and `rest` methods are available only when `obsidian_mode: true`
 - Captured files land at vault root by default (`inbox_folder: ""`); set to a subfolder name to collect them elsewhere
 - Filename format: `YYYY.MM.DD.HHMM Title As Written.md` — spaces preserved, macOS-safe characters only (`/` `:` stripped)
 
@@ -142,32 +147,48 @@ Vault (markdown) → nooscope-watcher (watchdog/fsevents) → .nooscope/nooscope
 - Writes immediately to a caller-specified vault-relative path — no queue, no timestamp prefix
 - Creates or overwrites (upsert) — designed for living documents that get refined over time
 - Parent directories created automatically
-- Use for: skills, reference notes, project docs — anything with a permanent, meaningful name
-- Single write primitive: `capture_thought`'s flush pipeline delegates to the same `_write_vault_file` function
+- Use for: skills, project notes, reference docs — anything with a permanent, meaningful name
 - Path traversal (`../`) is rejected
 
-**Skills** live at `Resources/Agents/Skills/`. Template: `Resources/Templates/Skill.md`.
-A skill note describes purpose, trigger conditions, step-by-step instructions, output format, and examples in a model-agnostic format any LLM can read and apply.
+**Skills** live at `Resources/Skills/`. Each skill is a plain markdown file describing purpose, trigger conditions, step-by-step instructions, and output format in a model-agnostic format any LLM can read and apply. Skills are indexed by nooscope and searchable. When Claude Code is started directly in a vault folder, it reads the same skill files without any MCP indirection.
+
+Current skills: `list-participants`, `meeting-context`, `project-init`, `project-commit-log`
 
 **Log entry** (`log_thought` / `nooscope log`):
 - Always queued first in `pending_log_entries` with `target_date`
 - Immediately appends to daily note if it exists
-- If daily note is missing: writes template (`daily_notes_template` in config) with `logger::` entry already in `## Notes` section; Templater processes `<% %>` tags when Obsidian next opens the file
+- If daily note is missing: writes from `daily_notes_template` (plain text with `{placeholder}` substitution)
 - `target_date` preserved so past entries always land in the correct date's note
+- Bullet prefix is `capture.log_prefix` (default `"- "`; set to `"logger:: "` for Obsidian Dataview)
 
 **Calendar agenda** (`nooscope inject-agenda`):
 - Reads events via EventKit (`pyobjc-framework-EventKit`); requires `calendar.enabled: true` in config
 - Replaces the `## Agenda` section of the daily note with today's events
-- Timed events get a meeting note created in `References/Meetings/` and are linked via wikilink
+- Timed events get a meeting note created in `calendar.meetings_folder` and are linked via relative markdown link
 - If the daily note doesn't exist, creates it from `daily_notes_template` first
 - If no events: injects a Claude Haiku-generated refresher from recently modified notes
 - Requires macOS Calendar permission on first run (TCC prompt)
+
+### Template system
+
+Templates use plain `{placeholder}` substitution via `str.format_map()` with a `SafeDict` that leaves unknown keys untouched. No external templating dependency.
+
+**Standard keys:**
+
+| Key | Resolves to |
+|---|---|
+| `{date}` | Today's date in `daily_notes_format` (e.g. `2026.04.01`) |
+| `{title}` | Note title from filename or user input |
+| `{daily-note}` | Relative markdown link to today's daily note |
+| `{skill:name}` | AI-generated content from `Resources/Skills/name.md` |
+
+`{skill:name}` keys are resolved by reading the named skill file and passing it to the Claude API with available context variables. Unknown keys are left as-is in the rendered output.
 
 ### Chunking
 
 - Fits in context window → embedded directly as `chunk_index=0`
 - Oversized + `##` headings → split into chunks 1..N; `chunk_index=0` gets barycenter of chunk embeddings
-- MOC notes (`is_moc=true`) → barycenter of `![[referenced]]` file embeddings
+- MOC notes (`is_moc=true`) → barycenter of `![[referenced]]` file embeddings (Obsidian vaults only)
 - Oversized + no headings → embedded as-is; candidates for manual refactoring
 
 ### Embedding backends
@@ -190,39 +211,59 @@ Key settings:
 ```yaml
 vaults:
   - name: braintree
-    path: /Volumes/Developer/BrainTree
-    db_path: /Volumes/Developer/BrainTree/.nooscope/nooscope.db
-    ignore:                        # folders/globs to skip during indexing
-      - Resources/Templates
-      - ResourcesDaily
+    path: /Users/rodney/Library/Mobile Documents/com~apple~CloudDocs/BrainTree
+    db_path: /Users/rodney/Library/Mobile Documents/com~apple~CloudDocs/BrainTree/.nooscope/nooscope.db
+    obsidian_mode: false           # true enables URI/REST flush, Templater fallback, wikilink-only backlinks
+    ignore:
+      - Resources/Templates        # template placeholders are not content
 
 embeddings:
   semantic:
     backend: ollama
-    model: bge-m3                  # 1024 dimensions, 8192-token context; switched from nomic-embed-text
+    model: bge-m3                  # 1024 dimensions, 8192-token context
     dimensions: 1024
 
 capture:
-  flush_method: inbox             # inbox = direct write (recommended); uri = Obsidian URI; rest = REST plugin
-  inbox_folder: ""                # empty = vault root; e.g. "_inbox" for a subfolder
-  obsidian_vault_name: BrainTree  # only needed for uri method
-  daily_notes_folder: Resources/Daily
-  daily_notes_format: "%Y-%m-%d"
-  log_section: Notes
-  daily_notes_template: "Resources/Templates/Daily Note.md"
-  # API keys must be set in the environment (ANTHROPIC_API_KEY), never in this file.
+  flush_method: inbox             # inbox = direct write (default); uri/rest require obsidian_mode: true
+  inbox_folder: ""                # empty = vault root
+  daily_notes_folder: Daily
+  daily_notes_format: "%Y.%m.%d"
+  log_section: Agenda
+  log_prefix: "- "               # set to "logger:: " for Obsidian Dataview
+  daily_notes_template: "Resources/Templates/Daily.md"
 
 calendar:
   enabled: true
-  calendars: []                    # empty = all calendars; or ["Work", "Personal"]
-  agenda_section: Agenda           # ## heading name to inject events under
-  meetings_folder: References/Meetings
-  meeting_template: Resources/Templates/Meeting.md
+  calendars: []                   # empty = all calendars
+  agenda_section: Agenda
+  meetings_folder: Meetings
+  meeting_template: ""            # vault-relative path to meeting note template
 ```
+
+**`obsidian_mode`** is a per-vault flag. When `false` (default):
+- Only `inbox` flush method is available
+- Daily note creation uses plain template substitution (no Templater)
+- `uri` or `rest` flush methods raise a clear error if configured
+
+## Vault layout (active vault)
+
+```
+BrainTree/
+  Daily/           YYYY.MM.DD.md — daily journal notes
+  Meetings/        meeting notes linked to and from daily notes
+  Notes/           YYYY.MM.DD-Author-ShortTitle.md — content notes
+  Projects/        one note per project (create via project-init skill)
+  Resources/
+    Skills/        model-agnostic skill files (indexed and searchable)
+    Templates/     {placeholder} templates (ignored from index)
+  .nooscope/       nooscope.db — vector index (gitignored, rebuildable)
+```
+
+Links between notes use standard relative markdown: `[Title](../Folder/File.md)`. Each note typically links back to the daily note on which it was created.
 
 ## Testing
 
-The test suite uses **pytest** with **pytest-cov** for coverage. 92 tests across 7 files.
+The test suite uses **pytest** with **pytest-cov** for coverage. 94 tests across 7 files.
 
 ```bash
 .venv/bin/pytest                          # run all tests
@@ -231,7 +272,7 @@ The test suite uses **pytest** with **pytest-cov** for coverage. 92 tests across
 ```
 
 **Test files:**
-- `tests/test_capture.py` — log entry, template creation, flush methods, queue lifecycle
+- `tests/test_capture.py` — log entry, template creation, flush methods, queue lifecycle, obsidian_mode guard
 - `tests/test_agenda.py` — `_replace_agenda_section`, `_build_agenda_lines`, `inject_agenda`, CLI inject-agenda paths
 - `tests/test_indexer.py` — parsing, chunking, MOC handling
 - `tests/test_backends.py` — embedding backend availability checks
@@ -249,9 +290,6 @@ patch("nooscope.meeting_notes.create_meeting_note", ...)
 patch("nooscope.agenda_injector.get_events_for_date", ...)
 ```
 
+**Obsidian-specific code** lives entirely in `nooscope/obsidian.py`. Patch `nooscope.obsidian.subprocess.run` (not `nooscope.capture.subprocess.run`) when testing URI flush behavior.
+
 **Docstrings:** All public functions use Google style (`Args:`, `Returns:`, `Raises:`).
-
-## Known issues
-
-- 4 notes have malformed YAML frontmatter (`Andy Matuschuck.md`, `Bad Mother Application.md`, `MetaLearning A framework...`, `Omnivore Template.md`) — parse errors at index time, not embedded.
-- ~124 notes currently unindexed — mix of empty templates (now excluded via ignore list), short stubs, and a few oversized notes without `##` headings.

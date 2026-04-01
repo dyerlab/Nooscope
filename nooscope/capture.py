@@ -3,9 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
-import time
-import urllib.parse
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -93,26 +90,6 @@ def _render_note(capture: dict) -> str:
     return "\n".join(lines)
 
 
-def _flush_uri(capture: dict, vault_name: str, inbox_folder: str) -> None:
-    filename = _note_filename(capture)
-    stem = filename[:-3]  # strip .md — Obsidian adds it
-    note_path = f"{inbox_folder}/{stem}" if inbox_folder else stem
-    content = _render_note(capture)
-
-    # Obsidian URI has a practical content length limit (~2000 chars).
-    # For longer captures, fall back to a stub note pointing the author to nooscope queue.
-    if len(content) > 1800:
-        content = _render_note({**capture, "content": capture["content"][:1600] + "\n\n[truncated — see nooscope queue]"})
-
-    # Use percent-encoding (not form-encoding) — Obsidian's URI handler requires
-    # %20 for spaces, not +. The name parameter must preserve / for folder structure.
-    vault_enc = urllib.parse.quote(vault_name, safe="")
-    name_enc = urllib.parse.quote(note_path, safe="/")
-    content_enc = urllib.parse.quote(content, safe="")
-    url = f"obsidian://new?vault={vault_enc}&name={name_enc}&content={content_enc}"
-    subprocess.run(["open", url], check=True)
-
-
 def _flush_inbox(capture: dict, vault_root: str, inbox_folder: str) -> None:
     from nooscope.tools.writing import _write_vault_file
     filename = _note_filename(capture)
@@ -120,20 +97,8 @@ def _flush_inbox(capture: dict, vault_root: str, inbox_folder: str) -> None:
     _write_vault_file(vault_root, path, _render_note(capture))
 
 
-def _flush_rest(capture: dict, inbox_folder: str, port: int, api_key: str) -> None:
-    import httpx
-    filename = _note_filename(capture)
-    note_path = f"{inbox_folder}/{filename}" if inbox_folder else filename
-    url = f"http://localhost:{port}/vault/{urllib.parse.quote(note_path)}"
-    headers = {"Content-Type": "text/markdown"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    resp = httpx.put(url, content=_render_note(capture).encode(), headers=headers, timeout=10)
-    resp.raise_for_status()
-
-
-def _build_bullet(text: str, refs: list[str] | None) -> str:
-    bullet = f"- logger:: {text.strip()}"
+def _build_bullet(text: str, refs: list[str] | None, prefix: str = "- ") -> str:
+    bullet = f"{prefix}{text.strip()}"
     if refs:
         bullet += " " + " ".join(f"[[{r.strip()}]]" for r in refs)
     return bullet
@@ -163,8 +128,8 @@ def _insert_bullet_into_lines(lines: list[str], bullet: str, section_heading: st
 
 
 def _append_log_bullet(daily_path: Path, text: str, refs: list[str] | None, cap_cfg) -> str:
-    """Append a logger:: bullet to an existing daily note file. Returns the bullet."""
-    bullet = _build_bullet(text, refs)
+    """Append a log bullet to an existing daily note file. Returns the bullet."""
+    bullet = _build_bullet(text, refs, prefix=cap_cfg.log_prefix)
     lines = daily_path.read_text(encoding="utf-8").splitlines(keepends=True)
     lines = _insert_bullet_into_lines(lines, bullet, f"## {cap_cfg.log_section}")
     daily_path.write_text("".join(lines), encoding="utf-8")
@@ -172,12 +137,7 @@ def _append_log_bullet(daily_path: Path, text: str, refs: list[str] | None, cap_
 
 
 def _create_from_template(daily_path: Path, text: str, refs: list[str] | None, vault_root: str, config) -> bool:
-    """Copy the Templater daily note template to daily_path, with the logger bullet
-    already inserted into the Notes section.
-
-    Templater fires trigger_on_file_creation when Obsidian opens the new file
-    and renders all <% %> tags in place. Plain markdown (including logger:: entries)
-    survives the render untouched.
+    """Copy the daily note template to daily_path with the log bullet already inserted.
 
     Returns True if the template was found and written, False otherwise.
     """
@@ -190,7 +150,7 @@ def _create_from_template(daily_path: Path, text: str, refs: list[str] | None, v
         log.warning("Daily note template not found: %s", template_path)
         return False
 
-    bullet = _build_bullet(text, refs)
+    bullet = _build_bullet(text, refs, prefix=cap_cfg.log_prefix)
     lines = template_path.read_text(encoding="utf-8").splitlines(keepends=True)
     lines = _insert_bullet_into_lines(lines, bullet, f"## {cap_cfg.log_section}")
 
@@ -206,21 +166,6 @@ def _create_from_template(daily_path: Path, text: str, refs: list[str] | None, v
     daily_path.write_text("".join(lines), encoding="utf-8")
     log.info("Created daily note from template: %s", daily_path.name)
     return True
-
-
-def _open_obsidian_for_daily(target_date: date, config) -> None:
-    """Fallback: fire obsidian://new so Obsidian creates the daily note from its
-    folder template. Used when no daily_notes_template path is configured."""
-    cap_cfg = config.capture
-    if not cap_cfg.obsidian_vault_name:
-        return
-    note_file = f"{cap_cfg.daily_notes_folder}/{target_date.strftime(cap_cfg.daily_notes_format)}"
-    params = urllib.parse.urlencode({"vault": cap_cfg.obsidian_vault_name, "file": note_file})
-    url = f"obsidian://new?{params}"
-    try:
-        subprocess.run(["open", url], check=False)
-    except FileNotFoundError:
-        pass  # `open` not available (non-macOS)
 
 
 def _try_flush_log_entry(
@@ -240,21 +185,14 @@ def _try_flush_log_entry(
 
     if not daily_path.exists():
         if cap_cfg.daily_notes_template:
-            # Write template + entry directly. Templater processes <% %> tags
-            # when Obsidian opens the file — logger:: entry survives intact.
             if _create_from_template(daily_path, text, refs, vault_root, config):
                 mark_log_entry_status(conn, entry_id, "written")
-                bullet = _build_bullet(text, refs)
+                bullet = _build_bullet(text, refs, prefix=cap_cfg.log_prefix)
                 return {"id": entry_id, "status": "written", "file": str(daily_path), "entry": bullet}
-        elif poll and target_date >= date.today() and cap_cfg.obsidian_vault_name:
-            # Fallback when no template path is configured: ask Obsidian via URI
-            # and poll for up to 8 seconds.
-            _open_obsidian_for_daily(target_date, config)
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline:
-                if daily_path.exists():
-                    break
-                time.sleep(0.5)
+        elif poll and target_date >= date.today() and config.vaults and config.vaults[0].obsidian_mode:
+            # Obsidian-mode fallback: ask Obsidian to create the daily note via URI.
+            from nooscope import obsidian as _obsidian
+            _obsidian.wait_for_daily(target_date, daily_path, config)
 
     if not daily_path.exists():
         log.debug("Daily note not yet available for %s — entry #%d stays pending", target_date_str, entry_id)
@@ -275,11 +213,11 @@ def log_entry(
     today: date | None = None,
     poll: bool = True,
 ) -> dict:
-    """Queue a logger:: entry for today's daily note and attempt immediate flush.
+    """Queue a log entry for today's daily note and attempt immediate flush.
 
     Always queues first so the entry is never lost, then tries to append to the
-    daily note immediately. If the note doesn't exist yet, fires obsidian://open
-    and polls up to 8 seconds for Obsidian to create it. If still unavailable,
+    daily note immediately. If the note doesn't exist yet, creates it from the
+    configured template. If still unavailable (and obsidian_mode is off),
     returns status='pending'; the entry will be retried by flush_log_entries()
     or automatically when the watcher sees the daily note created.
     """
@@ -310,11 +248,11 @@ def flush_log_entries(conn, vault_root: str, config, poll: bool = False) -> dict
 
 
 def flush_captures(conn, config) -> dict:
-    """Flush all pending captures to the Obsidian inbox via the configured method.
+    """Flush all pending captures to the vault inbox via the configured method.
 
     Iterates every ``status='pending'`` capture and dispatches it using
-    ``capture.flush_method`` (``uri``, ``inbox``, or ``rest``). Each capture is
-    marked ``flushed`` on success or ``failed`` on error.
+    ``capture.flush_method``.  ``inbox`` is the default and only method available
+    without ``obsidian_mode: true``; ``uri`` and ``rest`` require Obsidian.
 
     Args:
         conn: Open SQLite connection.
@@ -330,6 +268,7 @@ def flush_captures(conn, config) -> dict:
 
     cap_cfg = config.capture
     vault_root = config.vaults[0].path if config.vaults else ""
+    obsidian_mode = config.vaults[0].obsidian_mode if config.vaults else False
 
     for capture in pending:
         filename = _note_filename(capture)
@@ -341,15 +280,21 @@ def flush_captures(conn, config) -> dict:
 
         try:
             if cap_cfg.flush_method == "uri":
+                if not obsidian_mode:
+                    raise ValueError("flush_method 'uri' requires obsidian_mode: true in vault config")
+                from nooscope import obsidian as _obsidian
                 if not cap_cfg.obsidian_vault_name:
                     raise ValueError("capture.obsidian_vault_name must be set for uri flush method")
-                _flush_uri(capture, cap_cfg.obsidian_vault_name, cap_cfg.inbox_folder)
+                _obsidian.flush_uri(capture, cap_cfg.obsidian_vault_name, cap_cfg.inbox_folder)
             elif cap_cfg.flush_method == "inbox":
                 if not vault_root:
                     raise ValueError("No vault configured")
                 _flush_inbox(capture, vault_root, cap_cfg.inbox_folder)
             elif cap_cfg.flush_method == "rest":
-                _flush_rest(capture, cap_cfg.inbox_folder, cap_cfg.rest_port, cap_cfg.rest_api_key)
+                if not obsidian_mode:
+                    raise ValueError("flush_method 'rest' requires obsidian_mode: true in vault config")
+                from nooscope import obsidian as _obsidian
+                _obsidian.flush_rest(capture, cap_cfg.inbox_folder, cap_cfg.rest_port, cap_cfg.rest_api_key)
             else:
                 raise ValueError(f"Unknown flush_method: {cap_cfg.flush_method!r}")
 

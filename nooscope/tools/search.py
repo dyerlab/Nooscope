@@ -88,7 +88,7 @@ def search(
                     "chunk_index": row["chunk_index"],
                     "similarity": similarity,
                     "content": row["content"] or "",
-                    "source": "obsidian",
+                    "source": "nooscope",
                 }
             )
 
@@ -171,7 +171,7 @@ def cross_space_search(
                 "score_low": score_low,
                 "delta": delta,
                 "content": row["content"] or "",
-                "source": "obsidian",
+                "source": "nooscope",
             }
         )
 

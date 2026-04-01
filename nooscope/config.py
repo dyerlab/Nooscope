@@ -13,6 +13,7 @@ class VaultConfig:
     path: str
     db_path: str
     ignore: list[str] = field(default_factory=list)
+    obsidian_mode: bool = False     # enable Obsidian-specific write paths (URI, REST, Templater)
 
 
 @dataclass
@@ -45,8 +46,9 @@ class CaptureConfig:
     rest_api_key: str = ""
     daily_notes_folder: str = "Resources/Daily"
     daily_notes_format: str = "%Y-%m-%d"
-    log_section: str = "Notes"         # heading name (without ##) to append logger:: entries
-    daily_notes_template: str = ""     # vault-relative path to Templater template, e.g. Resources/Templates/Daily Note.md
+    log_section: str = "Notes"         # heading name (without ##) to append log entries under
+    log_prefix: str = "- "             # bullet prefix for log entries; set to "logger:: " for Dataview (obsidian_mode)
+    daily_notes_template: str = ""     # vault-relative path to a daily note template
 
 
 @dataclass
@@ -108,6 +110,7 @@ def load_config(path: str | None = None) -> Config:
             path=v["path"],
             db_path=v["db_path"],
             ignore=v.get("ignore", []),
+            obsidian_mode=v.get("obsidian_mode", False),
         )
         for v in raw.get("vaults", [])
     ]
@@ -144,6 +147,7 @@ def load_config(path: str | None = None) -> Config:
         daily_notes_folder=raw_cap.get("daily_notes_folder", "Resources/Daily"),
         daily_notes_format=raw_cap.get("daily_notes_format", "%Y-%m-%d"),
         log_section=raw_cap.get("log_section", "Notes"),
+        log_prefix=raw_cap.get("log_prefix", "- "),
         daily_notes_template=raw_cap.get("daily_notes_template", ""),
     )
 

@@ -2,6 +2,7 @@ vaults:
   - name: braintree
     path: /Volumes/Developer/BrainTree
     db_path: /Volumes/Developer/BrainTree/.nooscope/nooscope.db
+    obsidian_mode: false           # set true to enable Obsidian-specific write paths (URI, REST, Templater)
     ignore:                        # paths/globs to skip during indexing (prefix or fnmatch)
       - Resources/Templates        # template files are structure, not content
       # - ResourcesDaily           # example: secondary folder to exclude
@@ -25,17 +26,18 @@ mcp:
 
 capture:
   # Structured note capture (queued, flushed as new files)
-  flush_method: uri               # uri | inbox | rest
+  flush_method: inbox             # inbox (default) | uri (obsidian_mode) | rest (obsidian_mode)
   inbox_folder: _inbox
-  obsidian_vault_name: BrainTree  # must match Obsidian's vault display name exactly
-  # rest_port: 27123              # for rest method (Obsidian Local REST API plugin)
+  # obsidian_vault_name: BrainTree  # required for uri flush method (obsidian_mode only)
+  # rest_port: 27123              # for rest method (obsidian_mode only)
   # rest_api_key: ""
 
   # Ephemeral log entries (direct write to today's daily note)
   daily_notes_folder: Resources/Daily
   daily_notes_format: "%Y-%m-%d"
-  log_section: Notes              # ## heading name to append logger:: bullets under
-  daily_notes_template: "Resources/Templates/Daily Note.md"  # Templater template; <% %> tags rendered by Obsidian on first open
+  log_section: Notes              # ## heading name to append log entries under
+  log_prefix: "- "               # bullet prefix; use "logger:: " for Obsidian Dataview queries
+  daily_notes_template: "Resources/Templates/Daily Note.md"
 
 calendar:
   enabled: false

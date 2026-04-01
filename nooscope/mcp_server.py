@@ -252,10 +252,8 @@ def generate_vault_layout(vault: str | None = None) -> dict:
     # Gather per-folder note counts (top-level only for the summary table)
     top_folders: dict[str, int] = {}
     all_tags: Counter = Counter()
-    skip = {".obsidian", ".trash"}
-
     for item in sorted(root.iterdir()):
-        if not item.is_dir() or item.name in skip or item.name.startswith("."):
+        if not item.is_dir() or item.name.startswith("."):
             continue
         count = sum(1 for _ in item.rglob("*.md"))
         top_folders[item.name] = count
